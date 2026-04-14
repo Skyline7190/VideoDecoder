@@ -35,24 +35,30 @@ public class MainActivity extends AppCompatActivity {
     private Button speed1Button;
     private Button speed2Button;
     private Button speed3Button;
+    private Button decodeVideoButton;
     private SeekBar seekBar;
     //
 
     private TextView currentTimeText;
     private TextView totalTimeText;
     private boolean isSeeking = false;
+    private volatile boolean isSurfaceReady = false;
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
     private final Runnable progressUpdater = new Runnable() {
         @Override
         public void run() {
-            int duration = getDurationMs();
-            int current = getCurrentPositionMs();
-            if (duration > 0) {
-                if (current < 0) current = 0;
-                if (current > duration) current = duration;
-                updateProgress(current, duration);
+            if (isDecodeRunning()) {
+                int duration = getDurationMs();
+                int current = getCurrentPositionMs();
+                if (duration > 0) {
+                    if (current < 0) current = 0;
+                    if (current > duration) current = duration;
+                    updateProgress(current, duration);
+                }
+                progressHandler.postDelayed(this, 200);
+            } else {
+                progressHandler.postDelayed(this, 600);
             }
-            progressHandler.postDelayed(this, 200);
         }
     };
 
@@ -101,7 +107,9 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                seekToPosition(seekBar.getProgress());
+                if (isDecodeRunning()) {
+                    seekToPosition(seekBar.getProgress());
+                }
                 isSeeking = false;
             }
         });
@@ -114,20 +122,16 @@ public class MainActivity extends AppCompatActivity {
 
 
         speed05Button.setOnClickListener(v -> {
-            setPlaybackSpeed(0.5f);
-            Toast.makeText(this, "播放速度设置为0.5倍", Toast.LENGTH_SHORT).show();
+            applyPlaybackSpeed(0.5f, "播放速度设置为0.5倍");
         });
         speed1Button.setOnClickListener(v -> {
-            setPlaybackSpeed(1.0f);
-            Toast.makeText(this, "播放速度设置为1倍", Toast.LENGTH_SHORT).show();
+            applyPlaybackSpeed(1.0f, "播放速度设置为1倍");
         });
         speed2Button.setOnClickListener(v -> {
-            setPlaybackSpeed(2.0f);
-            Toast.makeText(this, "播放速度设置为2倍", Toast.LENGTH_SHORT).show();
+            applyPlaybackSpeed(2.0f, "播放速度设置为2倍");
         });
         speed3Button.setOnClickListener(v -> {
-            setPlaybackSpeed(3.0f);
-            Toast.makeText(this, "播放速度设置为3倍", Toast.LENGTH_SHORT).show();
+            applyPlaybackSpeed(3.0f, "播放速度设置为3倍");
         });
         //------------分割线------------//
         // 获取 SurfaceView
@@ -140,13 +144,16 @@ public class MainActivity extends AppCompatActivity {
                 public void surfaceCreated(SurfaceHolder holder) {
                     // 将 Surface 传递给 native 层
                     setSurface(holder.getSurface());
+                    isSurfaceReady = true;
                 }
 
                 @Override
                 public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {}
 
                 @Override
-                public void surfaceDestroyed(SurfaceHolder holder) {}
+                public void surfaceDestroyed(SurfaceHolder holder) {
+                    isSurfaceReady = false;
+                }
             });
         } else {
             // 如果 surfaceView 为 null，输出错误信息
@@ -161,12 +168,16 @@ public class MainActivity extends AppCompatActivity {
 
         tv = findViewById(R.id.sample_text);
         Button selectVideoButton = findViewById(R.id.select_video_button);
-        Button decodeVideoButton = findViewById(R.id.decode_video_button);
+        decodeVideoButton = findViewById(R.id.decode_video_button);
 
         Button playButton = findViewById(R.id.play_button);
         Button pauseButton = findViewById(R.id.pause_button);
 
         playButton.setOnClickListener(v -> {
+            if (!isDecodeRunning()) {
+                Toast.makeText(this, "请先开始解析视频", Toast.LENGTH_SHORT).show();
+                return;
+            }
             if (!isPlaying) {
                 isPlaying = true;
                 resumeDecoding();
@@ -175,6 +186,10 @@ public class MainActivity extends AppCompatActivity {
         });
 
         pauseButton.setOnClickListener(v -> {
+            if (!isDecodeRunning()) {
+                Toast.makeText(this, "当前无可暂停的播放", Toast.LENGTH_SHORT).show();
+                return;
+            }
             if (isPlaying) {
                 isPlaying = false;
                 pauseDecoding();
@@ -191,14 +206,30 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "正在解析中，请稍候", Toast.LENGTH_SHORT).show();
                 return;
             }
+            if (!isSurfaceReady) {
+                Toast.makeText(this, "渲染界面尚未就绪，请稍后重试", Toast.LENGTH_SHORT).show();
+                return;
+            }
             if (videoPath != null) {
                 // 获取应用私有目录下的输出路径
-                String outputPath = new File(getExternalFilesDir(null), "output.yuv").getAbsolutePath();
+                File externalDir = getExternalFilesDir(null);
+                if (externalDir == null) {
+                    Toast.makeText(this, "无法访问应用存储目录", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                String outputPath = new File(externalDir, "output.yuv").getAbsolutePath();
                 isPlaying = true;
+                setDecodeButtonEnabled(false);
                 decodeThread = new Thread(() -> {
                     runOnUiThread(() -> tv.setText("正在解析视频..."));
-                    decodeVideo(videoPath, outputPath);
-                });
+                    try {
+                        decodeVideo(videoPath, outputPath);
+                    } finally {
+                        isPlaying = false;
+                        decodeThread = null;
+                        setDecodeButtonEnabled(true);
+                    }
+                }, "video-decode-runner");
                 decodeThread.start();
             } else {
                 Toast.makeText(this, "请先选择视频文件", Toast.LENGTH_SHORT).show();
@@ -252,44 +283,69 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent resultData) {
         super.onActivityResult(requestCode, resultCode, resultData);
-        if (requestCode == PICK_VIDEO_REQUEST && resultCode == RESULT_OK) {
+        if (requestCode == PICK_VIDEO_REQUEST && resultCode == RESULT_OK && resultData != null) {
             Uri uri = resultData.getData();
             if (uri != null) {
                 try {
                     // 将 URI 的内容复制到临时文件
                     String tempFilePath = copyUriToTempFile(uri);
                     videoPath = tempFilePath;
-                    runOnUiThread(() -> {
-                        tv.setText("已选择视频：" + videoPath);
-                    });
+                    tv.setText("已选择视频：" + videoPath);
+                    updateProgress(0, 0);
                 } catch (IOException e) {
                     e.printStackTrace();
-                    runOnUiThread(() -> {
-                        tv.setText("无法读取文件");
-                    });
+                    tv.setText("无法读取文件");
                 }
 
-                // 获取持久化 URI 权限
-                getContentResolver().takePersistableUriPermission(uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                // 并非所有文档提供者都支持持久化授权，失败时保持播放流程可用
+                try {
+                    getContentResolver().takePersistableUriPermission(
+                            uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (SecurityException ignored) {
+                }
             }
         }
     }
     /* ----------------- 文件操作辅助方法 ----------------- */
     private String copyUriToTempFile(Uri uri) throws IOException {
-        InputStream inputStream = getContentResolver().openInputStream(uri);
         File tempFile = File.createTempFile("temp", "mp4", getCacheDir());
         tempFile.deleteOnExit();
-        OutputStream outputStream = new FileOutputStream(tempFile);
-        byte[] buffer = new byte[4096];
-        int bytesRead;
-        while ((bytesRead = inputStream.read(buffer)) != -1) {
-            outputStream.write(buffer, 0, bytesRead);
+        try (InputStream inputStream = getContentResolver().openInputStream(uri);
+             OutputStream outputStream = new FileOutputStream(tempFile)) {
+            if (inputStream == null) {
+                throw new IOException("无法打开输入流");
+            }
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                outputStream.write(buffer, 0, bytesRead);
+            }
         }
-        inputStream.close();
-        outputStream.close();
         return tempFile.getAbsolutePath();
     }
+
+    private boolean isDecodeRunning() {
+        return decodeThread != null && decodeThread.isAlive();
+    }
+
+    private void applyPlaybackSpeed(float speed, String message) {
+        if (!isDecodeRunning()) {
+            Toast.makeText(this, "请先开始解析视频", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        setPlaybackSpeed(speed);
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
+    }
+
+    private void setDecodeButtonEnabled(boolean enabled) {
+        runOnUiThread(() -> {
+            if (decodeVideoButton != null) {
+                decodeVideoButton.setEnabled(enabled);
+                decodeVideoButton.setText(enabled ? "解析视频" : "解析中...");
+            }
+        });
+    }
+
     /* ----------------- 回调方法 ----------------- */
     public void onVideoDecoded(final String result) {
         runOnUiThread(() -> {
@@ -307,6 +363,7 @@ public class MainActivity extends AppCompatActivity {
         if (decodeThread != null && decodeThread.isAlive()) {
             decodeThread.interrupt();
         }
+        isSurfaceReady = false;
         // 释放 Native 层音频资源
         nativeReleaseAudio();
     }

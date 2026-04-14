@@ -20,7 +20,6 @@ extern std::atomic<bool> g_stopRequested;
 
 void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& queue, FrameQueue& frameQueue) {
     AVFrame *frame = av_frame_alloc();
-    int64_t last_pts = AV_NOPTS_VALUE;
 
     while (true) {
         if (g_stopRequested.load()) {
@@ -50,10 +49,6 @@ void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& que
                 break;
             }
             continue;
-        }
-        // 记录最后一个有效包的pts
-        if (pkt->pts != AV_NOPTS_VALUE) {
-            last_pts = pkt->pts;
         }
         if (avcodec_send_packet(codec_ctx, pkt) == 0) {
             while (avcodec_receive_frame(codec_ctx, frame) == 0) {

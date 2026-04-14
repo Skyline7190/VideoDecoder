@@ -38,7 +38,7 @@ extern "C" {
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersrc.h>
 #include <libavfilter/buffersink.h>
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "YourTag", __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 /* ========================== 全局变量声明 ========================== */
 // 全局变量，用于保存 Java 层传入的 Surface 对应的 NativeWindow
@@ -176,6 +176,9 @@ Java_com_example_videodecoder_MainActivity_setSurface(JNIEnv* env, jobject thiz,
         ANativeWindow_release(g_nativeWindow);
         g_nativeWindow = nullptr;
     }
+    if (surface == nullptr) {
+        return;
+    }
     g_nativeWindow = ANativeWindow_fromSurface(env, surface);
 }
 //视频解码主函数
@@ -195,10 +198,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     g_currentPositionMs.store(0);
     g_durationMs.store(0);
 
-    const char* native_video_path = env->GetStringUTFChars(video_path, nullptr);
-    LOGD("开始解析视频: %s", native_video_path);
-    // 使用完后释放内存
-    env->ReleaseStringUTFChars(video_path, native_video_path);
+    LOGD("开始解析视频: %s", path);
 
     // 1. 打开输入文件
     AVFormatContext *fmt_ctx = nullptr;
@@ -302,7 +302,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     PacketQueue video_packet_queue;//视频数据包队列
     PacketQueue audio_packet_queue;//音频数据包队列
     FrameQueue frameQueue;//帧队列
-    FrameQueue audio_frame_queue;//音频帧队列
 
     Demuxer demuxer;//解复用器
     Decoder decoder;//解码器
@@ -654,8 +653,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                                 (1000000 * frameRate.den / frameRate.num) :
                                 (1000000 / 30); // 默认30fps
 
-        int consecutive_drops = 0; // 连续丢帧计数器
-
         while (true) {
             if (g_stopRequested.load()) {
                 break;
@@ -696,7 +693,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                     if (diff > 0) {  
                         // 视频比音频快了，睡眠等待
                         // 【增加倍速支持】：等待时间需要除以播放速度
-                        int64_t sleep_time = diff / g_playbackSpeed.load();
+                        float speed = g_playbackSpeed.load();
+                        if (!std::isfinite(speed)) speed = 1.0f;
+                        if (speed < 0.25f) speed = 0.25f;
+                        int64_t sleep_time = static_cast<int64_t>(diff / speed);
                         if (sleep_time > 100000) sleep_time = 100000; // 单次最多只睡 100ms
                         std::this_thread::sleep_for(std::chrono::microseconds(sleep_time));
                     }
@@ -772,6 +772,9 @@ Java_com_example_videodecoder_MainActivity_stringFromJNI(JNIEnv *env, jobject th
 }
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_setPlaybackSpeed(JNIEnv *env, jobject thiz, jfloat speed) {
+    if (!std::isfinite(speed)) speed = 1.0f;
+    if (speed < 0.5f) speed = 0.5f;
+    if (speed > 3.0f) speed = 3.0f;
     g_playbackSpeed.store(speed);
 }
 

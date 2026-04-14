@@ -241,6 +241,11 @@ app/
 - Android 35 权限模型适配：采用 SAF 文件选择，移除 `READ/WRITE_EXTERNAL_STORAGE` 依赖。
 - 构建稳定性修复：`CMakeLists.txt` 统一使用 `AudioRender.cpp` 文件名，避免大小写导致的构建问题。
 - UI 并发防护：解码按钮在任务进行中拦截重复触发，避免并发解码竞争。
+- Surface 就绪门禁：仅在 `surfaceCreated` 后允许启动解码，降低未就绪渲染导致黑屏/假卡住概率。
+- 控制命令状态对齐：seek / pause / resume / 倍速仅在解码运行中生效，减少空操作 JNI 调用。
+- 交互与状态一致性增强：解码期间禁用“解析视频”并显示“解析中...”，结束后自动恢复按钮状态。
+- 输入与 I/O 防御补齐：`onActivityResult` 判空、持久化授权异常保护、文件复制采用 try-with-resources。
+- 边界值防御：倍速参数与渲染等待增加有限值/范围校验，避免异常输入引发等待异常；`setSurface` 与输出目录增加空值保护。
 
 ## 12. 后续演进建议
 
