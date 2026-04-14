@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "exa": {
+      "baseUrl": "https://mcp.exa.ai/mcp"
+    },
+    "weibo": {
+      "command": "C:\\Users\\QiChen\\agent-reach-venv\\Scripts\\python.exe",
+      "args": ["-c", "import weibo_mcp_server; weibo_mcp_server.main()"]
+    },
+    "douyin": {
+      "baseUrl": "http://localhost:18070/mcp"
+    }
+  }
+}

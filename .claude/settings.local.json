@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(xargs cat:*)",
+      "mcp__PromptX__remember",
+      "mcp__PromptX__action"
+    ]
+  }
+}
