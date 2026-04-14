@@ -10,6 +10,7 @@
 // 外部声明全局暂停标志
 extern std::atomic<bool> g_paused;
 extern std::atomic<int64_t> g_pauseTime;
+extern std::atomic<bool> g_isSeeking;
 
 
 #define LOGE(format, ...) __android_log_print(ANDROID_LOG_ERROR, "Tag", format, ##__VA_ARGS__)
@@ -22,6 +23,12 @@ void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& que
     int64_t last_pts = AV_NOPTS_VALUE;
 
     while (true) {
+        if (g_isSeeking.load()) {
+            avcodec_flush_buffers(codec_ctx);
+            frameQueue.clear();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
         // 处理暂停状态 - 使用更高效的检查方式
         while (g_paused.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -30,8 +37,10 @@ void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& que
         AVPacket *pkt = queue.pop();
 
         if (pkt == nullptr) { // End of stream
-            break;
-
+            if (queue.isDemuxFinished()) {
+                break;
+            }
+            continue;
         }
         // 记录最后一个有效包的pts
         if (pkt->pts != AV_NOPTS_VALUE) {
@@ -39,6 +48,10 @@ void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& que
         }
         if (avcodec_send_packet(codec_ctx, pkt) == 0) {
             while (avcodec_receive_frame(codec_ctx, frame) == 0) {
+                if (g_isSeeking.load()) {
+                    av_frame_unref(frame);
+                    break;
+                }
                 fwrite(frame->data[0], 1, frame->width * frame->height, yuv_file);
                 fwrite(frame->data[1], 1, frame->width * frame->height / 4, yuv_file);
                 fwrite(frame->data[2], 1, frame->width * frame->height / 4, yuv_file);

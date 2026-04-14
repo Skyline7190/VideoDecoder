@@ -3,6 +3,7 @@
 //
 
 #include "queue.h"
+#include <chrono>
 
 void PacketQueue::push(AVPacket* packet) {
     std::unique_lock<std::mutex> lock(mutex);
@@ -14,7 +15,9 @@ void PacketQueue::push(AVPacket* packet) {
 
 AVPacket* PacketQueue::pop() {
     std::unique_lock<std::mutex> lock(mutex);
-    cond.wait(lock, [this]() { return !queue.empty() || demuxFinished.load(); });
+    cond.wait_for(lock, std::chrono::milliseconds(10), [this]() {
+        return !queue.empty() || demuxFinished.load();
+    });
     if (queue.empty()) return nullptr;
     AVPacket* pkt = queue.front();
     queue.pop();

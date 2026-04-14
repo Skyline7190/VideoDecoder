@@ -25,29 +25,31 @@ void Demuxer::demux(AVFormatContext* fmt_ctx,
                     int audio_stream_index, PacketQueue& audio_queue) {
     AVPacket *pkt = av_packet_alloc();
     while (true) {
+        if (g_isSeeking.load()) {
+            int64_t target_pts_ms = g_seekPositionMs.load();
+            int64_t target_pts_us = target_pts_ms * 1000;
+            int seekRet = avformat_seek_file(fmt_ctx, -1, INT64_MIN, target_pts_us, INT64_MAX, AVSEEK_FLAG_BACKWARD);
+            if (seekRet < 0) {
+                int64_t seek_target = av_rescale_q(target_pts_us, AV_TIME_BASE_Q, fmt_ctx->streams[video_stream_index]->time_base);
+                seekRet = av_seek_frame(fmt_ctx, video_stream_index, seek_target, AVSEEK_FLAG_BACKWARD);
+            }
+            if (seekRet < 0) {
+                LOGD("Seek failed at %lld ms", static_cast<long long>(target_pts_ms));
+            }
+            g_seekApplied.store(true);
+            av_packet_unref(pkt);
+            continue;
+        }
+
         if (g_paused) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
-        if (g_isSeeking.load()) {
-            // 执行 FFmpeg 的真实文件跳转
-            int64_t target_pts_ms = g_seekPositionMs.load();
-            int64_t target_pts_us = target_pts_ms * 1000;
-            
-            // 跳转到目标位置，使用 AVSEEK_FLAG_BACKWARD 确保跳转到关键帧防止花屏
-            int64_t seek_target = av_rescale_q(target_pts_us, AV_TIME_BASE_Q, fmt_ctx->streams[video_stream_index]->time_base);
-            av_seek_frame(fmt_ctx, video_stream_index, seek_target, AVSEEK_FLAG_BACKWARD);
-            
-            // 清理状态交给外层的 native-lib 处理 (队列清理、时钟重置等)
-            // 等待外层处理完毕解除 Seek 状态
-            while(g_isSeeking.load()) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            }
-        }
-
         if (av_read_frame(fmt_ctx, pkt) < 0) {
-            break;
+            // 不立即退出 demux 线程，允许后续用户触发 seek 后继续读取数据
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
         }
 
         if (pkt->stream_index == video_stream_index) {
@@ -66,6 +68,8 @@ void Demuxer::demux(AVFormatContext* fmt_ctx,
     av_packet_free(&pkt);
 
     // Send end signals
+    video_queue.setDemuxFinished(true);
+    audio_queue.setDemuxFinished(true);
     video_queue.push(nullptr);
     audio_queue.push(nullptr);
     LOGD("Demuxing finished (audio+video)");

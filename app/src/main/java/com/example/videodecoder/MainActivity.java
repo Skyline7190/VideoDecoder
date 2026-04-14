@@ -6,6 +6,8 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -44,6 +46,20 @@ public class MainActivity extends AppCompatActivity {
     private TextView currentTimeText;
     private TextView totalTimeText;
     private boolean isSeeking = false;
+    private final Handler progressHandler = new Handler(Looper.getMainLooper());
+    private final Runnable progressUpdater = new Runnable() {
+        @Override
+        public void run() {
+            int duration = getDurationMs();
+            int current = getCurrentPositionMs();
+            if (duration > 0) {
+                if (current < 0) current = 0;
+                if (current > duration) current = duration;
+                updateProgress(current, duration);
+            }
+            progressHandler.postDelayed(this, 200);
+        }
+    };
 
 
     /* ----------------- JNI原生方法声明 ----------------- */
@@ -56,6 +72,8 @@ public class MainActivity extends AppCompatActivity {
     public native void setPlaybackSpeed(float speed);
     public native void seekToPosition(int progressMs);
     public native void nativeReleaseAudio();
+    public native int getDurationMs();
+    public native int getCurrentPositionMs();
 
     //加载so库
     static {
@@ -69,27 +87,27 @@ public class MainActivity extends AppCompatActivity {
 
         // 初始化SeekBar
         seekBar = findViewById(R.id.seek_bar);
+        currentTimeText = findViewById(R.id.current_time_text);
+        totalTimeText = findViewById(R.id.total_time_text);
+        updateTimeText(0, 0);
+        progressHandler.post(progressUpdater);
         // 设置SeekBar监听
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (fromUser) {
-                    // 用户拖动进度条时的处理
-                    seekToPosition(progress);
+                    updateTimeText(progress, Math.max(seekBar.getMax(), progress));
                 }
             }
             @Override
             public void onStartTrackingTouch(SeekBar seekBar) {
-                // 开始拖动时暂停播放
                 isSeeking = true;
-                pauseDecoding();
             }
 
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {
-                // 停止拖动时恢复播放
+                seekToPosition(seekBar.getProgress());
                 isSeeking = false;
-                resumeDecoding();
             }
         });
 
@@ -196,6 +214,7 @@ public class MainActivity extends AppCompatActivity {
             } else if (videoPath != null) {
                 // 获取应用私有目录下的输出路径
                 String outputPath = new File(getExternalFilesDir(null), "output.yuv").getAbsolutePath();
+                isPlaying = true;
                 new Thread(() -> {
                     // 在开始解析前更新UI显示“正在解析”
                     decodeThread = new Thread(() -> {
@@ -321,6 +340,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        progressHandler.removeCallbacks(progressUpdater);
         if (decodeThread != null && decodeThread.isAlive()) {
             decodeThread.interrupt();
         }

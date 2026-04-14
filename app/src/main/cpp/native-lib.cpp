@@ -3,6 +3,10 @@
 #include <iostream>
 #include <android/log.h>
 #include <thread>
+#include <vector>
+#include <cmath>
+#include <inttypes.h>
+#include <cstring>
 #include "Demuxer.h"
 #include "Decoder.h"
 #include "queue.h"
@@ -17,6 +21,7 @@
 #include <android/native_window.h>
 #include <android/native_window_jni.h> //用于ANativeWindow_fromSurface
 std::atomic<bool> g_isSeeking{false};
+std::atomic<bool> g_seekApplied{false};
 std::atomic<int64_t> g_seekPositionMs{0};
 std::atomic<bool> g_paused{false};
 extern "C" {
@@ -28,6 +33,10 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavutil/time.h>
 #include <libswresample/swresample.h>
+#include <libavutil/opt.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersrc.h>
+#include <libavfilter/buffersink.h>
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "YourTag", __VA_ARGS__)
 
 /* ========================== 全局变量声明 ========================== */
@@ -177,6 +186,13 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     //获取输入输出路径
     const char *path = env->GetStringUTFChars(video_path, nullptr);
     const char *outPath = env->GetStringUTFChars(output_path, nullptr);
+    g_isSeeking.store(false);
+    g_seekApplied.store(false);
+    g_paused.store(false);
+    g_decodingFinished.store(false);
+    g_audioDecodingFinished.store(false);
+    g_currentPositionMs.store(0);
+    g_durationMs.store(0);
 
     const char* native_video_path = env->GetStringUTFChars(video_path, nullptr);
     LOGD("开始解析视频: %s", native_video_path);
@@ -201,6 +217,9 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         env->ReleaseStringUTFChars(video_path, path);
         env->ReleaseStringUTFChars(output_path, outPath);
         return;
+    }
+    if (fmt_ctx->duration != AV_NOPTS_VALUE && fmt_ctx->duration > 0) {
+        g_durationMs.store(static_cast<int64_t>(fmt_ctx->duration / 1000));
     }
 
     // 3. 初始化解码器
@@ -297,6 +316,122 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         if (!audio_codec_ctx || !g_audioRenderer) return;
 
         AVFrame *frame = av_frame_alloc();
+        AVFrame *tempoFrame = av_frame_alloc();
+        AVFilterGraph* tempoGraph = nullptr;
+        AVFilterContext* tempoSrc = nullptr;
+        AVFilterContext* tempoSink = nullptr;
+        float currentTempo = 1.0f;
+
+        auto releaseTempoGraph = [&]() {
+            if (tempoGraph) {
+                avfilter_graph_free(&tempoGraph);
+                tempoGraph = nullptr;
+            }
+            tempoSrc = nullptr;
+            tempoSink = nullptr;
+            currentTempo = 1.0f;
+        };
+
+        auto buildAtempoChain = [](float speed) -> std::string {
+            if (speed < 0.5f) speed = 0.5f;
+            if (speed > 3.0f) speed = 3.0f;
+            if (fabsf(speed - 1.0f) < 0.0001f) return "";
+
+            std::string chain;
+            float remain = speed;
+            while (remain > 2.0f + 0.0001f) {
+                if (!chain.empty()) chain += ",";
+                chain += "atempo=2.0";
+                remain /= 2.0f;
+            }
+            while (remain < 0.5f - 0.0001f) {
+                if (!chain.empty()) chain += ",";
+                chain += "atempo=0.5";
+                remain /= 0.5f;
+            }
+            if (!chain.empty()) chain += ",";
+            chain += "atempo=" + std::to_string(remain);
+            return chain;
+        };
+
+        auto ensureTempoGraph = [&](float speed) -> bool {
+            if (speed < 0.5f) speed = 0.5f;
+            if (speed > 3.0f) speed = 3.0f;
+
+            if (fabsf(speed - 1.0f) < 0.0001f) {
+                releaseTempoGraph();
+                return true;
+            }
+            if (tempoGraph && fabsf(speed - currentTempo) < 0.0001f) {
+                return true;
+            }
+
+            releaseTempoGraph();
+            tempoGraph = avfilter_graph_alloc();
+            if (!tempoGraph) return false;
+
+            const AVFilter* abuffer = avfilter_get_by_name("abuffer");
+            const AVFilter* atempo = avfilter_get_by_name("atempo");
+            const AVFilter* abuffersink = avfilter_get_by_name("abuffersink");
+            if (!abuffer || !atempo || !abuffersink) {
+                releaseTempoGraph();
+                return false;
+            }
+
+            int64_t channelLayout = av_get_default_channel_layout(audio_codec_ctx->channels);
+            char args[256];
+            snprintf(args, sizeof(args),
+                     "time_base=1/%d:sample_rate=%d:sample_fmt=%s:channel_layout=0x%" PRIx64,
+                     audio_codec_ctx->sample_rate,
+                     audio_codec_ctx->sample_rate,
+                     av_get_sample_fmt_name(AV_SAMPLE_FMT_S16),
+                     static_cast<uint64_t>(channelLayout));
+
+            if (avfilter_graph_create_filter(&tempoSrc, abuffer, "tempo_src", args, nullptr, tempoGraph) < 0) {
+                releaseTempoGraph();
+                return false;
+            }
+            if (avfilter_graph_create_filter(&tempoSink, abuffersink, "tempo_sink", nullptr, nullptr, tempoGraph) < 0) {
+                releaseTempoGraph();
+                return false;
+            }
+
+            AVFilterContext* last = tempoSrc;
+            std::string chain = buildAtempoChain(speed);
+            size_t pos = 0;
+            int index = 0;
+            while (pos < chain.size()) {
+                size_t comma = chain.find(',', pos);
+                std::string token = chain.substr(pos, comma == std::string::npos ? std::string::npos : comma - pos);
+                size_t eq = token.find('=');
+                const std::string opt = (eq == std::string::npos) ? "" : token.substr(eq + 1);
+                AVFilterContext* tempoNode = nullptr;
+                std::string name = "atempo_" + std::to_string(index++);
+                if (avfilter_graph_create_filter(&tempoNode, atempo, name.c_str(), opt.c_str(), nullptr, tempoGraph) < 0) {
+                    releaseTempoGraph();
+                    return false;
+                }
+                if (avfilter_link(last, 0, tempoNode, 0) < 0) {
+                    releaseTempoGraph();
+                    return false;
+                }
+                last = tempoNode;
+                if (comma == std::string::npos) break;
+                pos = comma + 1;
+            }
+
+            if (avfilter_link(last, 0, tempoSink, 0) < 0) {
+                releaseTempoGraph();
+                return false;
+            }
+            if (avfilter_graph_config(tempoGraph, nullptr) < 0) {
+                releaseTempoGraph();
+                return false;
+            }
+            currentTempo = speed;
+            return true;
+        };
+
         SwrContext* swr_ctx = swr_alloc_set_opts(nullptr,
                                                  av_get_default_channel_layout(audio_codec_ctx->channels),
                                                  AV_SAMPLE_FMT_S16,
@@ -307,20 +442,27 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                                                  0, nullptr);
         swr_init(swr_ctx);
 
+        int seekWaitLoops = 0;
         while (true) {
-            if (g_paused) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                continue;
-            }
-
-            // 处理 Seek 请求的资源清理
             if (g_isSeeking.load()) {
-                // 等待 Demuxer 线程执行完底层 av_seek_frame 操作
-                // (我们在 Demuxer.cpp 中执行了 av_seek_frame，然后挂起等这里清空队列)
-                
+                if (!g_seekApplied.load()) {
+                    if (seekWaitLoops < 200) {
+                        seekWaitLoops++;
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                        continue;
+                    }
+                    LOGD("Seek wait timed out, forcing queue/decoder cleanup");
+                } else {
+                    seekWaitLoops = 0;
+                }
+                if (!g_seekApplied.load()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
                 // 1. 清空所有的旧数据队列
                 video_packet_queue.clear();
                 audio_packet_queue.clear();
+                video_packet_queue.notifyAll();
+                audio_packet_queue.notifyAll();
                 frameQueue.clear();
                 
                 // 2. 清空 AAudio 积压
@@ -329,9 +471,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                     g_audioRenderer->init(audio_codec_ctx->sample_rate, audio_codec_ctx->channels, AAUDIO_FORMAT_PCM_I16);
                     g_audioRenderer->start();
                 }
+                releaseTempoGraph();
 
                 // 3. 清空解码器内部的历史缓存帧
-                avcodec_flush_buffers(codec_ctx);
+                // 视频解码器由视频解码线程自行 flush，避免跨线程并发访问 codec_ctx
                 if (audio_codec_ctx) {
                     avcodec_flush_buffers(audio_codec_ctx);
                 }
@@ -345,8 +488,15 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 }
                 
                 // 结束 Seek 状态，恢复正常播放
+                g_seekApplied.store(false);
                 g_isSeeking.store(false);
-                continue; 
+                seekWaitLoops = 0;
+                continue;
+            }
+
+            if (g_paused) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
             }
 
             // 【重磅修复】：防止音频解码过快导致时钟跑飞
@@ -357,7 +507,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
             }
 
             AVPacket *pkt = audio_packet_queue.pop();
-            if (pkt == nullptr) break;
+            if (pkt == nullptr) {
+                if (audio_packet_queue.isDemuxFinished()) break;
+                continue;
+            }
 
             if (avcodec_send_packet(audio_codec_ctx, pkt) == 0) {
                 while (avcodec_receive_frame(audio_codec_ctx, frame) == 0) {
@@ -371,7 +524,39 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                                               (const uint8_t**)frame->data, frame->nb_samples);
 
                     if (!g_paused && out_samples > 0) {
-                        g_audioRenderer->writeData(output, out_samples);
+                        float speed = g_playbackSpeed.load();
+                        if (speed < 0.25f) speed = 0.25f;
+                        if (speed > 3.0f) speed = 3.0f;
+                        if (!ensureTempoGraph(speed)) {
+                            g_audioRenderer->writeData(output, out_samples);
+                        } else if (!tempoGraph) {
+                            g_audioRenderer->writeData(output, out_samples);
+                        } else {
+                            av_frame_unref(tempoFrame);
+                            tempoFrame->format = AV_SAMPLE_FMT_S16;
+                            tempoFrame->channel_layout = av_get_default_channel_layout(audio_codec_ctx->channels);
+                            tempoFrame->sample_rate = audio_codec_ctx->sample_rate;
+                            tempoFrame->nb_samples = out_samples;
+
+                            if (av_frame_get_buffer(tempoFrame, 0) == 0) {
+                                int dataBytes = out_samples * audio_codec_ctx->channels * sizeof(int16_t);
+                                memcpy(tempoFrame->data[0], output, dataBytes);
+                                if (av_buffersrc_add_frame_flags(tempoSrc, tempoFrame, AV_BUFFERSRC_FLAG_KEEP_REF) >= 0) {
+                                    AVFrame* filtered = av_frame_alloc();
+                                    while (av_buffersink_get_frame(tempoSink, filtered) >= 0) {
+                                        if (filtered->nb_samples > 0) {
+                                            g_audioRenderer->writeData(filtered->data[0], filtered->nb_samples);
+                                        }
+                                        av_frame_unref(filtered);
+                                    }
+                                    av_frame_free(&filtered);
+                                } else {
+                                    g_audioRenderer->writeData(output, out_samples);
+                                }
+                            } else {
+                                g_audioRenderer->writeData(output, out_samples);
+                            }
+                        }
                     }
                     
                     // 必须在写进队列之后更新时钟，代表最后放进队列的帧PTS
@@ -388,6 +573,8 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         }
 
         av_frame_free(&frame);
+        av_frame_free(&tempoFrame);
+        releaseTempoGraph();
         swr_free(&swr_ctx);
         g_audioDecodingFinished = true;
     });
@@ -464,6 +651,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 g_videoClock.store(av_rescale_q(frame->pts,
                                                 fmt_ctx->streams[video_stream_index]->time_base,
                                                 AV_TIME_BASE_Q));
+                g_currentPositionMs.store(g_videoClock.load() / 1000);
             }
             // 音画同步核心机制
             if (g_audioRenderer && g_audioClock.load() > 0) {
@@ -491,8 +679,12 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 // 没有音频时的降级逻辑（基于帧率）
                 auto now = std::chrono::high_resolution_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastFrameTime).count();
-                if (elapsed < frameDuration) {
-                    std::this_thread::sleep_for(std::chrono::microseconds(frameDuration - elapsed));
+                float speed = g_playbackSpeed.load();
+                if (speed < 0.25f) speed = 0.25f;
+                int64_t targetFrameDuration = static_cast<int64_t>(frameDuration / speed);
+                if (targetFrameDuration < 1000) targetFrameDuration = 1000;
+                if (elapsed < targetFrameDuration) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(targetFrameDuration - elapsed));
                 }
             }
 
@@ -582,20 +774,30 @@ Java_com_example_videodecoder_MainActivity_setPlaybackSpeed(JNIEnv *env, jobject
 
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_seekToPosition(JNIEnv *env, jobject thiz, jint progressMs) {
-    g_seekPositionMs.store(progressMs);
+    int64_t targetMs = progressMs;
+    int64_t durationMs = g_durationMs.load();
+    if (targetMs < 0) targetMs = 0;
+    if (durationMs > 0 && targetMs > durationMs) targetMs = durationMs;
+    g_seekPositionMs.store(targetMs);
+    g_currentPositionMs.store(targetMs);
+    g_seekApplied.store(false);
     g_isSeeking.store(true);
+}
+
+JNIEXPORT jint JNICALL
+Java_com_example_videodecoder_MainActivity_getDurationMs(JNIEnv*, jobject) {
+    return static_cast<jint>(g_durationMs.load());
+}
+
+JNIEXPORT jint JNICALL
+Java_com_example_videodecoder_MainActivity_getCurrentPositionMs(JNIEnv*, jobject) {
+    return static_cast<jint>(g_currentPositionMs.load());
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_pauseDecoding(JNIEnv*, jobject) {
     if (!g_paused.exchange(true)) {  // 原子性地设置为true，并返回之前的值
         __android_log_print(ANDROID_LOG_DEBUG, "PauseResume", "Pausing playback");
-
-        // 先暂停音频
-        if (g_audioRenderer) {
-            g_audioRenderer->pause();
-        }
-
         // 记录暂停时间
         g_pauseTime = av_gettime_relative();
     }
@@ -612,11 +814,6 @@ Java_com_example_videodecoder_MainActivity_resumeDecoding(JNIEnv*, jobject) {
         // 调整时钟基准
         g_audioClock.store(g_audioClock.load() + pauseDuration);
         g_videoClock.store(g_videoClock.load() + pauseDuration);
-
-        // 恢复音频
-        if (g_audioRenderer) {
-            g_audioRenderer->resume();
-        }
     }
 }
 JNIEXPORT void JNICALL

@@ -145,6 +145,10 @@ aaudio_data_callback_result_t AudioRenderer::dataCallback(
     // Clear buffer first
     memset(audioData, 0, totalBytesNeeded);
 
+    if (g_paused.load()) {
+        return AAUDIO_CALLBACK_RESULT_CONTINUE;
+    }
+
     std::lock_guard<std::mutex> lock(renderer->queueMutex);
     while (bytesWritten < totalBytesNeeded && !renderer->audioQueue.empty()) {
         auto& buffer = renderer->audioQueue.front();
@@ -153,11 +157,6 @@ aaudio_data_callback_result_t AudioRenderer::dataCallback(
 
         memcpy(output + bytesWritten, buffer.data(), bytesToCopy);
         bytesWritten += bytesToCopy;
-        // 处理暂停状态 - 使用更高效的检查方式
-        while (g_paused.load()) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
-        }
         if (bytesToCopy == buffer.size()) {
             renderer->audioQueue.pop();
         } else {
@@ -189,19 +188,12 @@ aaudio_data_callback_result_t AudioRenderer::dataCallback(
 void AudioRenderer::pause() {
     if (!initialized || !playing.load()) return;
 
-    std::lock_guard<std::mutex> lock(queueMutex);
     aaudio_result_t result = AAudioStream_requestPause(stream);
 
     if (result != AAUDIO_OK) {
         LOGE("Failed to pause stream: %s", AAudio_convertResultToText(result));
         needsRecovery = true;
     } else {
-        // 等待流真正暂停
-        aaudio_stream_state_t state;
-        do {
-            state = AAudioStream_getState(stream);
-        } while (state != AAUDIO_STREAM_STATE_PAUSED && state != AAUDIO_STREAM_STATE_STOPPED);
-
         playing.store(false);
         LOGE("Audio successfully paused");
     }
@@ -213,7 +205,6 @@ void AudioRenderer::resume() {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(queueMutex);
     aaudio_stream_state_t currentState = AAudioStream_getState(stream);
     LOGD("Current audio stream state before resume: %d", currentState);
 
@@ -247,12 +238,6 @@ void AudioRenderer::resume() {
             }
         }
     } else {
-        // 等待流真正启动
-        aaudio_stream_state_t state;
-        do {
-            state = AAudioStream_getState(stream);
-        } while (state != AAUDIO_STREAM_STATE_STARTED);
-
         playing.store(true);
         LOGD("Audio successfully resumed");
     }

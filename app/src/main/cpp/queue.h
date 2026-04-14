@@ -38,6 +38,7 @@ public:
             av_packet_free(&pkt);
             queue.pop();
         }
+        cond.notify_all();
     }
 
 private:
