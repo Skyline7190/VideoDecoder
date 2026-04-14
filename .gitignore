@@ -17,3 +17,7 @@
 .cxx
 local.properties
 Thumbs.db
+
+# Markdown: keep only README.md in remote repository
+/*.md
+!/README.md
