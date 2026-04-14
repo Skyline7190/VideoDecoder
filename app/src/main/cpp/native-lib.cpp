@@ -58,6 +58,16 @@ std::atomic<int64_t> g_durationMs{0};
 std::atomic<int64_t> g_currentPositionMs{0};
 // 播放速度控制变量
 std::atomic<float> g_playbackSpeed{1.0f};
+constexpr float kPlaybackSpeedDefault = 1.0f;
+constexpr float kPlaybackSpeedMin = 0.5f;
+constexpr float kPlaybackSpeedMax = 3.0f;
+
+inline float sanitizePlaybackSpeed(float speed) {
+    if (!std::isfinite(speed)) return kPlaybackSpeedDefault;
+    if (speed < kPlaybackSpeedMin) return kPlaybackSpeedMin;
+    if (speed > kPlaybackSpeedMax) return kPlaybackSpeedMax;
+    return speed;
+}
 
 /* ========================== EGL 相关函数 ========================== */
 // 初始化 EGLDisplay
@@ -343,8 +353,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         };
 
         auto buildAtempoChain = [](float speed) -> std::string {
-            if (speed < 0.5f) speed = 0.5f;
-            if (speed > 3.0f) speed = 3.0f;
+            speed = sanitizePlaybackSpeed(speed);
             if (fabsf(speed - 1.0f) < 0.0001f) return "";
 
             std::string chain;
@@ -365,8 +374,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         };
 
         auto ensureTempoGraph = [&](float speed) -> bool {
-            if (speed < 0.5f) speed = 0.5f;
-            if (speed > 3.0f) speed = 3.0f;
+            speed = sanitizePlaybackSpeed(speed);
 
             if (fabsf(speed - 1.0f) < 0.0001f) {
                 releaseTempoGraph();
@@ -544,9 +552,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                                               (const uint8_t**)frame->data, frame->nb_samples);
 
                     if (!g_paused && out_samples > 0) {
-                        float speed = g_playbackSpeed.load();
-                        if (speed < 0.25f) speed = 0.25f;
-                        if (speed > 3.0f) speed = 3.0f;
+                        float speed = sanitizePlaybackSpeed(g_playbackSpeed.load());
                         if (!ensureTempoGraph(speed)) {
                             g_audioRenderer->writeData(output, out_samples);
                         } else if (!tempoGraph) {
@@ -694,8 +700,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                         // 视频比音频快了，睡眠等待
                         // 【增加倍速支持】：等待时间需要除以播放速度
                         float speed = g_playbackSpeed.load();
-                        if (!std::isfinite(speed)) speed = 1.0f;
-                        if (speed < 0.25f) speed = 0.25f;
+                        speed = sanitizePlaybackSpeed(speed);
                         int64_t sleep_time = static_cast<int64_t>(diff / speed);
                         if (sleep_time > 100000) sleep_time = 100000; // 单次最多只睡 100ms
                         std::this_thread::sleep_for(std::chrono::microseconds(sleep_time));
@@ -706,8 +711,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 // 没有音频时的降级逻辑（基于帧率）
                 auto now = std::chrono::high_resolution_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastFrameTime).count();
-                float speed = g_playbackSpeed.load();
-                if (speed < 0.25f) speed = 0.25f;
+                float speed = sanitizePlaybackSpeed(g_playbackSpeed.load());
                 int64_t targetFrameDuration = static_cast<int64_t>(frameDuration / speed);
                 if (targetFrameDuration < 1000) targetFrameDuration = 1000;
                 if (elapsed < targetFrameDuration) {
@@ -772,10 +776,7 @@ Java_com_example_videodecoder_MainActivity_stringFromJNI(JNIEnv *env, jobject th
 }
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_setPlaybackSpeed(JNIEnv *env, jobject thiz, jfloat speed) {
-    if (!std::isfinite(speed)) speed = 1.0f;
-    if (speed < 0.5f) speed = 0.5f;
-    if (speed > 3.0f) speed = 3.0f;
-    g_playbackSpeed.store(speed);
+    g_playbackSpeed.store(sanitizePlaybackSpeed(speed));
 }
 
 JNIEXPORT void JNICALL

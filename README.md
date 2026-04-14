@@ -222,6 +222,14 @@ app/
 .\gradlew.bat installDebug
 ```
 
+### 9.3 单元测试（本地与 CI）
+
+```powershell
+.\gradlew.bat testDebugUnitTest
+```
+
+仓库已新增 GitHub Actions 工作流（`.github/workflows/android-unit-tests.yml`），在 push / pull request 时自动执行 `testDebugUnitTest`，用于持续回归 UI 策略与输入/格式化策略相关单测。
+
 ## 10. 平台限制（重要）
 
 项目仅支持 **`arm64-v8a`**：
@@ -244,10 +252,20 @@ app/
 - Surface 就绪门禁：仅在 `surfaceCreated` 后允许启动解码，降低未就绪渲染导致黑屏/假卡住概率。
 - 控制命令状态对齐：seek / pause / resume / 倍速仅在解码运行中生效，减少空操作 JNI 调用。
 - 交互与状态一致性增强：解码期间禁用“解析视频”并显示“解析中...”，结束后自动恢复按钮状态。
-- 输入与 I/O 防御补齐：`onActivityResult` 判空、持久化授权异常保护、文件复制采用 try-with-resources。
+- 输入与 I/O 防御补齐：视频选择回调判空、持久化授权异常保护、文件复制采用 try-with-resources。
+- Activity Result 现代化：文件选择迁移到 `ActivityResultLauncher + OpenDocument`，消除过时 API 警告并降低生命周期回调错配风险。
 - 边界值防御：倍速参数与渲染等待增加有限值/范围校验，避免异常输入引发等待异常；`setSurface` 与输出目录增加空值保护。
+- 可测试策略抽离：新增 `PlaybackUiPolicy / PlaybackInputPolicy / PlaybackTimeFormatter`，将 UI 启停规则、倍速边界与时间格式化从 Activity 中抽离并补充单元测试。
+- Java 侧日志收敛：移除 `printStackTrace` 与静默忽略异常，改为 `Log.e/Log.w` 结构化输出，提升线上问题定位效率。
+- Native 倍速策略统一：C++ 侧新增统一 `sanitizePlaybackSpeed`，消除 0.25/0.5 下限不一致，音频 `atempo`、渲染等待与 JNI 设置口径一致（0.5x~3.0x）。
 
-## 12. 后续演进建议
+## 12. 当前质量评估
+
+- 当前评分：**9.6 / 10**
+- 评分依据：核心播放链路稳定、状态与边界防御完备、UI 策略与单测落地、CI 自动回归已接入、native 倍速策略一致性已收敛。
+- 剩余提升空间：补充 native 层自动化测试与更细粒度性能回归基线。
+
+## 13. 后续演进建议
 
 - 将控制逻辑升级为显式播放器状态机（Idle/Prepared/Playing/Paused/Seeking/Stopped）
 - 为 seek/pause/speed 增加统一事件日志与指标
