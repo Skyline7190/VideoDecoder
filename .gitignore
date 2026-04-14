@@ -1,6 +1,9 @@
 *.iml
 .gradle
 /local.properties
+/.claude/
+/.idea/
+/.vscode/
 /.idea/caches
 /.idea/libraries
 /.idea/modules.xml
@@ -13,3 +16,4 @@
 .externalNativeBuild
 .cxx
 local.properties
+Thumbs.db
