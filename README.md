@@ -13,6 +13,7 @@
 - AAudio 低延迟音频输出
 - 播放控制：播放 / 暂停 / 倍速（变速不变调）
 - 进度控制：SeekBar 拖动跳转（Seek）
+- 界面风格：Material Design 3（MD3）语义色与组件体系
 - 导出 YUV 文件用于调试分析
 
 ## 2. 技术架构（重点）
@@ -161,12 +162,26 @@ Seek 采用两阶段握手机制，避免跨线程竞态：
 - 暂停时静音输出
 - 维护排队字节数用于延迟估算与同步
 
+### 6.3 界面系统（MD3）
+
+- 主题基线：`Theme.Material3.DayNight.NoActionBar`
+- 色彩语义：`colorSurface / colorOnSurface / colorOnSurfaceVariant / colorPrimary`
+- 组件体系：
+  - 容器：`MaterialCardView`（Surface 区、进度区、状态区）
+  - 按钮：`MaterialButton`（Button / TonalButton / OutlinedButton）
+- 交互一致性：
+  - 四个主控制按钮使用统一 MD3 样式（TonalButton）
+  - 进度条与强调色绑定主题主色
+
 ## 7. 关键文件地图
 
 ```text
 app/
 ├─ src/main/java/com/example/videodecoder/MainActivity.java
 ├─ src/main/res/layout/activity_main.xml
+├─ src/main/res/values/themes.xml
+├─ src/main/res/values-night/themes.xml
+├─ src/main/res/values/colors.xml
 ├─ src/main/cpp/
 │  ├─ native-lib.cpp          # JNI入口 + 编排层 + 音频解码/atempo
 │  ├─ Demuxer.cpp/.h          # 拆包与seek应用
