@@ -24,6 +24,7 @@ std::atomic<bool> g_isSeeking{false};
 std::atomic<bool> g_seekApplied{false};
 std::atomic<int64_t> g_seekPositionMs{0};
 std::atomic<bool> g_paused{false};
+std::atomic<bool> g_stopRequested{false};
 extern "C" {
 //日志宏定义
 #define LOG_TAG "NativeLib"
@@ -45,11 +46,10 @@ ANativeWindow* g_nativeWindow = nullptr;
 std::atomic<bool> g_decodingFinished{false};// 解码完成标志
 
 // 全局暂停控制变量
-
-std::atomic<int64_t> g_pauseTime{0};
 //音频相关变量
 AudioRenderer* g_audioRenderer = nullptr;
 std::atomic<bool> g_audioDecodingFinished{false};
+std::atomic<bool> g_sessionActive{false};
 // 全局变量添加
 std::atomic<int64_t> g_audioClock{0};
 std::atomic<int64_t> g_videoClock{0};
@@ -189,6 +189,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     g_isSeeking.store(false);
     g_seekApplied.store(false);
     g_paused.store(false);
+    g_stopRequested.store(false);
     g_decodingFinished.store(false);
     g_audioDecodingFinished.store(false);
     g_currentPositionMs.store(0);
@@ -212,7 +213,14 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     int video_stream_index = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
     int audio_stream_index = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     if (video_stream_index < 0 && audio_stream_index < 0) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "No video stream found or audio stream found");
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "No video or audio stream found");
+        avformat_close_input(&fmt_ctx);
+        env->ReleaseStringUTFChars(video_path, path);
+        env->ReleaseStringUTFChars(output_path, outPath);
+        return;
+    }
+    if (video_stream_index < 0) {
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "No video stream found");
         avformat_close_input(&fmt_ctx);
         env->ReleaseStringUTFChars(video_path, path);
         env->ReleaseStringUTFChars(output_path, outPath);
@@ -262,14 +270,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                     __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Failed to initialize audio renderer");
                     delete g_audioRenderer;
                     g_audioRenderer = nullptr;
-                    // === 新增同步设置 ===
-                    int64_t cacheTimeMs = 300; // 自定义缓存时间
-                    g_audioRenderer->setSyncThreshold(100); // 同步阈值（单位毫秒）
-                    g_audioRenderer->setAudioStartTime(av_gettime_relative() / 1000 + cacheTimeMs);
-                    // === 新增结束 ===
-
-                    g_audioRenderer->start();
                 } else {
+                    int64_t cacheTimeMs = 300;
+                    g_audioRenderer->setSyncThreshold(100);
+                    g_audioRenderer->setAudioStartTime(av_gettime_relative() / 1000 + cacheTimeMs);
                     g_audioRenderer->start();
                 }
             }
@@ -280,6 +284,12 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     FILE *yuv_file = fopen(outPath, "wb");
     if (!yuv_file) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Failed to open output file at %s", outPath);
+        if (g_audioRenderer) {
+            g_audioRenderer->stop();
+            delete g_audioRenderer;
+            g_audioRenderer = nullptr;
+        }
+        avcodec_free_context(&audio_codec_ctx);
         avcodec_free_context(&codec_ctx);
         avformat_close_input(&fmt_ctx);
         env->ReleaseStringUTFChars(video_path, path);
@@ -287,6 +297,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         return;
     }
     /* ------------------------- 线程创建阶段 ------------------------- */
+    g_sessionActive.store(true);
     // 1. 创建队列
     PacketQueue video_packet_queue;//视频数据包队列
     PacketQueue audio_packet_queue;//音频数据包队列
@@ -444,9 +455,12 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
         int seekWaitLoops = 0;
         while (true) {
+            if (g_stopRequested.load()) {
+                break;
+            }
             if (g_isSeeking.load()) {
                 if (!g_seekApplied.load()) {
-                    if (seekWaitLoops < 200) {
+                    if (seekWaitLoops < 1000) {
                         seekWaitLoops++;
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
                         continue;
@@ -495,6 +509,9 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
             }
 
             if (g_paused) {
+                if (g_stopRequested.load()) {
+                    break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
@@ -508,12 +525,16 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
             AVPacket *pkt = audio_packet_queue.pop();
             if (pkt == nullptr) {
-                if (audio_packet_queue.isDemuxFinished()) break;
+                if (audio_packet_queue.isDemuxFinished() || g_stopRequested.load()) break;
                 continue;
             }
 
             if (avcodec_send_packet(audio_codec_ctx, pkt) == 0) {
                 while (avcodec_receive_frame(audio_codec_ctx, frame) == 0) {
+                    if (g_stopRequested.load()) {
+                        av_frame_unref(frame);
+                        break;
+                    }
                     
                     // 重采样
                     uint8_t* output;
@@ -636,14 +657,20 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         int consecutive_drops = 0; // 连续丢帧计数器
 
         while (true) {
+            if (g_stopRequested.load()) {
+                break;
+            }
             // 检查暂停状态
             if (g_paused) {
+                if (g_stopRequested.load()) {
+                    break;
+                }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                 continue;
             }
             AVFrame* frame = frameQueue.pop(); // 阻塞式获取
             if (!frame) {
-                if (g_decodingFinished) break; // 终止信号
+                if (g_decodingFinished || g_stopRequested.load()) break; // 终止信号
                 continue;
             }
             // 更新视频时钟
@@ -707,40 +734,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     decodeThread.join();
     audioDecodeThread.join();
 
-    //先让解析线程结束，再等待渲染线程结束
-    const char* native_output_path = env->GetStringUTFChars(output_path, nullptr);
-    LOGD("视频解析完成，输出文件: %s", native_output_path);
-    // 使用完后释放内存
-    env->ReleaseStringUTFChars(output_path, native_output_path);
-
-
-    // 通知 Java 解码完成
-    jclass clazz = env->GetObjectClass(thiz);
-    if (clazz == nullptr) {
-        LOGD("无法获取 Java 类");
-        return;
-    }
-
-    // 获取 Java 方法 ID
-    jmethodID methodID = env->GetMethodID(clazz, "onVideoDecoded", "(Ljava/lang/String;)V");
-    if (methodID == nullptr) {
-        LOGD("无法找到 Java 方法 onVideoDecoded");
-        return;
-    }
-
-
-    const char* utf8_output_path = env->GetStringUTFChars(output_path, nullptr);
-    if (utf8_output_path == nullptr) {
-        LOGD("无法转换 jstring 到 const char*");
-        return; // 错误处理
-    }
-
-    // 调用 Java 方法，通知解析完成
-    jstring result = env->NewStringUTF(utf8_output_path);
-    env->CallVoidMethod(thiz, methodID, result);
-
-    // 记得释放字符串
-    env->ReleaseStringUTFChars(output_path, utf8_output_path);
+    LOGD("视频解析完成，输出文件: %s", outPath);
 
     if (g_audioRenderer) {
         g_audioRenderer->stop();
@@ -751,16 +745,25 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
     // 7. 关闭文件
     fclose(yuv_file);
+    avcodec_free_context(&audio_codec_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
+
+    // 8. 通知 Java 解码完成（只通知一次）
+    jclass cls = env->GetObjectClass(thiz);
+    if (cls != nullptr) {
+        jmethodID method = env->GetMethodID(cls, "onVideoDecoded", "(Ljava/lang/String;)V");
+        if (method != nullptr) {
+            jstring result = env->NewStringUTF(outPath);
+            env->CallVoidMethod(thiz, method, result);
+            env->DeleteLocalRef(result);
+        }
+        env->DeleteLocalRef(cls);
+    }
+
     env->ReleaseStringUTFChars(video_path, path);
     env->ReleaseStringUTFChars(output_path, outPath);
-
-    // 8. 通知 Java 解码完成
-    jclass cls = env->GetObjectClass(thiz);
-    jmethodID method = env->GetMethodID(cls, "onVideoDecoded", "(Ljava/lang/String;)V");
-    env->CallVoidMethod(thiz, method,
-                        env->NewStringUTF("YUV文件已生成:在/Android/data/com.example.videodecoder/files/"));
+    g_sessionActive.store(false);
 }
 
 JNIEXPORT jstring JNICALL
@@ -798,8 +801,6 @@ JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_pauseDecoding(JNIEnv*, jobject) {
     if (!g_paused.exchange(true)) {  // 原子性地设置为true，并返回之前的值
         __android_log_print(ANDROID_LOG_DEBUG, "PauseResume", "Pausing playback");
-        // 记录暂停时间
-        g_pauseTime = av_gettime_relative();
     }
 }
 
@@ -807,17 +808,17 @@ JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_resumeDecoding(JNIEnv*, jobject) {
     if (g_paused.exchange(false)) {  // 原子性地设置为false，并返回之前的值
         __android_log_print(ANDROID_LOG_DEBUG, "PauseResume", "Resuming playback");
-
-        // 计算暂停持续时间
-        int64_t pauseDuration = av_gettime_relative() - g_pauseTime;
-
-        // 调整时钟基准
-        g_audioClock.store(g_audioClock.load() + pauseDuration);
-        g_videoClock.store(g_videoClock.load() + pauseDuration);
     }
 }
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_nativeReleaseAudio(JNIEnv*, jobject) {
+    g_stopRequested.store(true);
+    g_isSeeking.store(false);
+    g_seekApplied.store(false);
+    g_paused.store(false);
+    if (g_sessionActive.load()) {
+        return;
+    }
     if (g_audioRenderer) {
         delete g_audioRenderer;
         g_audioRenderer = nullptr;

@@ -35,4 +35,5 @@ bool PacketQueue::isDemuxFinished() {
 
 void PacketQueue::setDemuxFinished(bool finished) {
     demuxFinished = finished;
+    cond.notify_all();
 }

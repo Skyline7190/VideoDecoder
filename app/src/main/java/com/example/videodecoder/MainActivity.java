@@ -1,9 +1,7 @@
 package com.example.videodecoder;
 
 import androidx.appcompat.app.AppCompatActivity;
-import android.Manifest;
 import android.content.Intent;
-import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -15,8 +13,6 @@ import android.widget.Button;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
-import androidx.core.app.ActivityCompat;
-import androidx.core.content.ContextCompat;
 import java.io.File;
 
 import java.io.FileOutputStream;
@@ -27,7 +23,6 @@ import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
     /* ----------------- 常量声明 ----------------- */
-    private static final int PERMISSION_REQUEST_CODE = 100;
     private static final int PICK_VIDEO_REQUEST = 101;
     /* ----------------- 成员变量 ----------------- */
     private TextView tv;
@@ -189,41 +184,22 @@ public class MainActivity extends AppCompatActivity {
 
         tv.setText(stringFromJNI());
         // 监听按钮点击事件
-        selectVideoButton.setOnClickListener(v -> {
-            if (ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.READ_EXTERNAL_STORAGE)
-                    != PackageManager.PERMISSION_GRANTED ||
-                    ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.RECORD_AUDIO)
-                            != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(MainActivity.this,
-                        new String[]{
-                                Manifest.permission.READ_EXTERNAL_STORAGE,
-                                Manifest.permission.RECORD_AUDIO
-                        },
-                        PERMISSION_REQUEST_CODE);
-            } else {
-                pickVideo();
-            }
-        });
+        selectVideoButton.setOnClickListener(v -> pickVideo());
 
         decodeVideoButton.setOnClickListener(v -> {
-            if (ContextCompat.checkSelfPermission(MainActivity.this,
-                    Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(MainActivity.this,
-                        new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
-                        PERMISSION_REQUEST_CODE);
-            } else if (videoPath != null) {
+            if (decodeThread != null && decodeThread.isAlive()) {
+                Toast.makeText(this, "正在解析中，请稍候", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (videoPath != null) {
                 // 获取应用私有目录下的输出路径
                 String outputPath = new File(getExternalFilesDir(null), "output.yuv").getAbsolutePath();
                 isPlaying = true;
-                new Thread(() -> {
-                    // 在开始解析前更新UI显示“正在解析”
-                    decodeThread = new Thread(() -> {
-                        runOnUiThread(() -> tv.setText("正在解析视频..."));
-                        decodeVideo(videoPath, outputPath);
-                    });
-                    decodeThread.start();
-                    // 假设decodeVideo方法会调用onVideoDecoded方法来通知解析结果
-                }).start();
+                decodeThread = new Thread(() -> {
+                    runOnUiThread(() -> tv.setText("正在解析视频..."));
+                    decodeVideo(videoPath, outputPath);
+                });
+                decodeThread.start();
             } else {
                 Toast.makeText(this, "请先选择视频文件", Toast.LENGTH_SHORT).show();
             }
@@ -314,19 +290,6 @@ public class MainActivity extends AppCompatActivity {
         outputStream.close();
         return tempFile.getAbsolutePath();
     }
-    /* ====================== 权限处理 ====================== */
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                pickVideo();
-            } else {
-                Toast.makeText(this, "没有权限访问存储", Toast.LENGTH_SHORT).show();
-            }
-        }
-    }
-
     /* ----------------- 回调方法 ----------------- */
     public void onVideoDecoded(final String result) {
         runOnUiThread(() -> {

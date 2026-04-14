@@ -10,7 +10,6 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 extern std::atomic<bool> g_paused;
-extern std::atomic<int64_t> g_pauseTime;
 
 AudioRenderer::AudioRenderer() = default;
 
@@ -57,13 +56,17 @@ void AudioRenderer::start() {
     aaudio_result_t result = AAudioStream_requestStart(stream);
     if (result != AAUDIO_OK) {
         LOGE("Failed to start stream: %s", AAudio_convertResultToText(result));
+        playing.store(false);
+        return;
     }
+    playing.store(true);
 }
 
 void AudioRenderer::stop() {
     if (!initialized) return;
 
     AAudioStream_requestStop(stream);
+    playing.store(false);
 }
 
 void AudioRenderer::cleanup() {
@@ -72,6 +75,7 @@ void AudioRenderer::cleanup() {
         stream = nullptr;
     }
     initialized = false;
+    playing.store(false);
 
     std::lock_guard<std::mutex> lock(queueMutex);
     while (!audioQueue.empty()) {
@@ -81,15 +85,20 @@ void AudioRenderer::cleanup() {
 }
 
 void AudioRenderer::writeData(const uint8_t* data, int32_t numFrames) {
-    if (!initialized) return;
+    if (!initialized || !data || numFrames <= 0) return;
 
-    int32_t frameSize = AAudioStream_getChannelCount(stream) * AAudioStream_getSamplesPerFrame(stream);
+    aaudio_format_t streamFormat = AAudioStream_getFormat(stream);
+    int32_t bytesPerSample = (streamFormat == AAUDIO_FORMAT_PCM_FLOAT) ? sizeof(float) : sizeof(int16_t);
+    int32_t frameSize = AAudioStream_getChannelCount(stream) * bytesPerSample;
+    if (frameSize <= 0) return;
     int32_t dataSize = numFrames * frameSize;
 
-    std::vector<uint8_t> buffer(data, data + dataSize);
+    AudioChunk chunk;
+    chunk.data.assign(data, data + dataSize);
+    chunk.offset = 0;
 
     std::lock_guard<std::mutex> lock(queueMutex);
-    audioQueue.push(std::move(buffer));
+    audioQueue.push(std::move(chunk));
     queuedAudioBytes += dataSize;
 }
 
@@ -134,7 +143,6 @@ aaudio_data_callback_result_t AudioRenderer::dataCallback(
         }
     }
     // === 新增同步逻辑结束 ===
-    int32_t framesWritten = 0;
     auto* output = static_cast<uint8_t*>(audioData);
     int32_t channelCount = AAudioStream_getChannelCount(stream);
     aaudio_format_t format = AAudioStream_getFormat(stream);
@@ -151,16 +159,15 @@ aaudio_data_callback_result_t AudioRenderer::dataCallback(
 
     std::lock_guard<std::mutex> lock(renderer->queueMutex);
     while (bytesWritten < totalBytesNeeded && !renderer->audioQueue.empty()) {
-        auto& buffer = renderer->audioQueue.front();
-        int32_t bytesToCopy = std::min(static_cast<int32_t>(buffer.size()),
-                                       totalBytesNeeded - bytesWritten);
+        auto& chunk = renderer->audioQueue.front();
+        int32_t remainInChunk = static_cast<int32_t>(chunk.data.size() - chunk.offset);
+        int32_t bytesToCopy = std::min(remainInChunk, totalBytesNeeded - bytesWritten);
 
-        memcpy(output + bytesWritten, buffer.data(), bytesToCopy);
+        memcpy(output + bytesWritten, chunk.data.data() + chunk.offset, bytesToCopy);
         bytesWritten += bytesToCopy;
-        if (bytesToCopy == buffer.size()) {
+        chunk.offset += static_cast<size_t>(bytesToCopy);
+        if (chunk.offset >= chunk.data.size()) {
             renderer->audioQueue.pop();
-        } else {
-            buffer.erase(buffer.begin(), buffer.begin() + bytesToCopy);
         }
         renderer->queuedAudioBytes -= bytesToCopy;
     }

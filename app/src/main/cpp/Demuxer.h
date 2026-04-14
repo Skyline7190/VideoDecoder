@@ -17,6 +17,7 @@ extern std::atomic<bool> g_isSeeking;
 extern std::atomic<bool> g_seekApplied;
 extern std::atomic<int64_t> g_seekPositionMs;
 extern std::atomic<bool> g_paused;
+extern std::atomic<bool> g_stopRequested;
 extern "C" {
 
 }

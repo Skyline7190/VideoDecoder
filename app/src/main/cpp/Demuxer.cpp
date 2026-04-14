@@ -4,10 +4,11 @@
 
 #include "Demuxer.h"
 #include "queue.h"
+#include <libavutil/error.h>
 //单队列
 void Demuxer::demux(AVFormatContext* fmt_ctx, int video_stream_index, PacketQueue& queue) {
     AVPacket *pkt = av_packet_alloc();
-    while (av_read_frame(fmt_ctx, pkt) >= 0) {
+    while (!g_stopRequested.load() && av_read_frame(fmt_ctx, pkt) >= 0) {
         if (pkt->stream_index == video_stream_index) {
             AVPacket *pktCopy = av_packet_alloc();
             av_packet_ref(pktCopy, pkt);
@@ -16,8 +17,8 @@ void Demuxer::demux(AVFormatContext* fmt_ctx, int video_stream_index, PacketQueu
         av_packet_unref(pkt);
     }
     av_packet_free(&pkt);
-    queue.push(nullptr); // Signal end of stream
     queue.setDemuxFinished(true);
+    queue.notifyAll();
 }
 //双队列
 void Demuxer::demux(AVFormatContext* fmt_ctx,
@@ -25,6 +26,9 @@ void Demuxer::demux(AVFormatContext* fmt_ctx,
                     int audio_stream_index, PacketQueue& audio_queue) {
     AVPacket *pkt = av_packet_alloc();
     while (true) {
+        if (g_stopRequested.load()) {
+            break;
+        }
         if (g_isSeeking.load()) {
             int64_t target_pts_ms = g_seekPositionMs.load();
             int64_t target_pts_us = target_pts_ms * 1000;
@@ -42,14 +46,25 @@ void Demuxer::demux(AVFormatContext* fmt_ctx,
         }
 
         if (g_paused) {
+            if (g_stopRequested.load()) {
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
-        if (av_read_frame(fmt_ctx, pkt) < 0) {
-            // 不立即退出 demux 线程，允许后续用户触发 seek 后继续读取数据
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            continue;
+        int readRet = av_read_frame(fmt_ctx, pkt);
+        if (readRet < 0) {
+            // EOF 直接结束，让解码线程正常退出，避免 join 卡死
+            if (readRet == AVERROR_EOF || (fmt_ctx->pb && avio_feof(fmt_ctx->pb))) {
+                break;
+            }
+            if (readRet == AVERROR(EAGAIN)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+            LOGD("av_read_frame failed: %d", readRet);
+            break;
         }
 
         if (pkt->stream_index == video_stream_index) {
@@ -70,7 +85,7 @@ void Demuxer::demux(AVFormatContext* fmt_ctx,
     // Send end signals
     video_queue.setDemuxFinished(true);
     audio_queue.setDemuxFinished(true);
-    video_queue.push(nullptr);
-    audio_queue.push(nullptr);
+    video_queue.notifyAll();
+    audio_queue.notifyAll();
     LOGD("Demuxing finished (audio+video)");
 }

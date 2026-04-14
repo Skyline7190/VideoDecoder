@@ -23,7 +23,7 @@ add_library(
         Decoder.cpp      # 解码器
         queue.cpp        # 线程安全队列
         videoRender.cpp  # 视频渲染器
-        audioRender.cpp  # 音频渲染器
+        AudioRender.cpp  # 音频渲染器
 
 )
 

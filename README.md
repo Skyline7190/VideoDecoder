@@ -23,12 +23,12 @@
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
 │ Java UI 层 (MainActivity)                                       │
-│ - 权限、文件选择、Surface 生命周期、控制事件、进度条轮询         │
+│ - 文件选择(SAF)、Surface 生命周期、控制事件、进度条轮询           │
 └───────────────┬──────────────────────────────────────────────────┘
                 │ JNI
 ┌───────────────▼──────────────────────────────────────────────────┐
 │ Native 编排层 (native-lib.cpp)                                 │
-│ - 全局状态: paused / seeking / clocks / playbackSpeed           │
+│ - 全局状态: paused / seeking / stopRequested / clocks / speed   │
 │ - 线程拉起与协同: Demux / VideoDecode / AudioDecode / Render     │
 │ - 状态握手: g_isSeeking + g_seekApplied                         │
 └───────────────┬──────────────────────────────────────────────────┘
@@ -50,7 +50,7 @@
 ### 2.1 分层职责
 
 **Java 层（`MainActivity.java`）**
-- 管理权限与 URI 文件选择，复制到可读路径
+- 基于 SAF 进行 URI 文件选择，复制到可读路径
 - 维护 `SurfaceView`，将 `Surface` 交给 native
 - 处理播放控制：pause/resume/speed/seek
 - 通过 `getDurationMs/getCurrentPositionMs` 轮询更新进度条与时间
@@ -61,6 +61,8 @@
   - `g_paused`：暂停开关
   - `g_isSeeking`：seek 请求中
   - `g_seekApplied`：demux 已执行底层 seek
+  - `g_stopRequested`：会话停止请求
+  - `g_sessionActive`：播放会话活动状态
   - `g_audioClock/g_videoClock`：A/V 时钟
   - `g_playbackSpeed`：播放速度
 - 负责线程生命周期、状态握手和资源释放
@@ -229,7 +231,18 @@ app/
 
 请在 arm64 真机或兼容环境运行，x86/x86_64 模拟器不在当前支持范围。
 
-## 11. 后续演进建议
+## 11. 近期稳定性优化（已落地）
+
+- 修复关键空指针与边界问题：视频流缺失时提前失败，避免 `streams[-1]` 访问；音频渲染器初始化失败路径不再解引用空指针。
+- 收敛线程生命周期：引入 `g_stopRequested + g_sessionActive`，支持会话中断与安全回收，降低退出/销毁场景卡死风险。
+- 改进队列与结束信号：demux 在 EOF/错误时明确结束并 `notifyAll`，避免等待线程长期阻塞。
+- JNI 回调与资源清理收敛：`onVideoDecoded` 单次回调，减少重复通知与重复字符串转换。
+- 音频回调热路径优化：队列消费改为偏移读取，避免频繁 `erase` 造成内存搬移。
+- Android 35 权限模型适配：采用 SAF 文件选择，移除 `READ/WRITE_EXTERNAL_STORAGE` 依赖。
+- 构建稳定性修复：`CMakeLists.txt` 统一使用 `AudioRender.cpp` 文件名，避免大小写导致的构建问题。
+- UI 并发防护：解码按钮在任务进行中拦截重复触发，避免并发解码竞争。
+
+## 12. 后续演进建议
 
 - 将控制逻辑升级为显式播放器状态机（Idle/Prepared/Playing/Paused/Seeking/Stopped）
 - 为 seek/pause/speed 增加统一事件日志与指标
