@@ -607,32 +607,39 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
     //4.视频渲染线程
     std::thread renderThread([&]() {
+        auto abortRender = [&](const char* message) {
+            LOGE("%s", message);
+            g_stopRequested.store(true);
+            video_packet_queue.notifyAll();
+            audio_packet_queue.notifyAll();
+            frameQueue.terminate();
+        };
 
         // 1. 检查NativeWindow有效性
         if (!g_nativeWindow) {
-            LOGE("RenderThread: NativeWindow is not valid");
+            abortRender("RenderThread: NativeWindow is not valid");
             return;
         }
 
         // 2. 初始化EGL环境
         EGLDisplay display = initEGLDisplay();
         if (display == EGL_NO_DISPLAY) {
-            LOGE("RenderThread: EGL display initialization failed");
+            abortRender("RenderThread: EGL display initialization failed");
             return;
         }
 
         EGLSurface surface = createEGLSurface(display, g_nativeWindow);
         if (surface == EGL_NO_SURFACE) {
-            LOGE("RenderThread: EGL surface creation failed");
             eglTerminate(display);
+            abortRender("RenderThread: EGL surface creation failed");
             return;
         }
 
         EGLContext context = createEGLContext(display, surface);
         if (context == EGL_NO_CONTEXT) {
-            LOGE("RenderThread: EGL context creation failed");
             eglDestroySurface(display, surface);
             eglTerminate(display);
+            abortRender("RenderThread: EGL context creation failed");
             return;
         }
 
@@ -644,8 +651,8 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         // 4. 初始化渲染器
         Renderer renderer;
         if (!renderer.init(width, height)) {
-            LOGE("RenderThread: Renderer initialization failed");
             cleanupEGL(display, surface, context);
+            abortRender("RenderThread: Renderer initialization failed");
             return;
         }
 
@@ -737,6 +744,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     demuxThread.join();
     decodeThread.join();
     audioDecodeThread.join();
+    renderThread.join();//之所以放在这里等待进程结束，是为了观察yuv文件何时生成
 
     LOGD("视频解析完成，输出文件: %s", outPath);
 
@@ -745,7 +753,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         delete g_audioRenderer;
         g_audioRenderer = nullptr;
     }
-    renderThread.join();//之所以放在这里等待进程结束，是为了观察yuv文件何时生成
 
     // 7. 关闭文件
     fclose(yuv_file);

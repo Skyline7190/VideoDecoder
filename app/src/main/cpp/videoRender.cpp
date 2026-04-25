@@ -164,9 +164,11 @@ void Renderer::updateTextures(AVFrame* frame) {
                      GL_LUMINANCE, GL_UNSIGNED_BYTE, data);
     };
 
+    int chromaWidth = (frame->width + 1) / 2;
+    int chromaHeight = (frame->height + 1) / 2;
     updatePlane(textureY, frame->width, frame->height, frame->data[0]);
-    updatePlane(textureU, frame->width/2, frame->height/2, frame->data[1]);
-    updatePlane(textureV, frame->width/2, frame->height/2, frame->data[2]);
+    updatePlane(textureU, chromaWidth, chromaHeight, frame->data[1]);
+    updatePlane(textureV, chromaWidth, chromaHeight, frame->data[2]);
 
     checkGLError("updateTextures");
 }

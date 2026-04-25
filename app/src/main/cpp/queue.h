@@ -102,6 +102,7 @@ public:
             av_frame_free(&queue_.front());
             queue_.pop();
         }
+        cond_.notify_all();
     }
     bool empty() const {
         std::unique_lock<std::mutex> lock(mutex_);
