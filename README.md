@@ -11,7 +11,7 @@ VideoDecoder 是一个基于 **Android + JNI + FFmpeg + OpenGL ES + AAudio** 的
 - 播放、暂停、恢复、Seek、倍速播放
 - 倍速播放使用 FFmpeg `atempo`，实现变速不变调
 - 通过进度条轮询 native 播放进度
-- 导出 `output.yuv`，便于调试解码与渲染链路
+- 可选导出 `output.yuv`，便于调试解码与渲染链路；默认播放不写 YUV 文件，减少 I/O 和存储压力
 
 ## 技术架构
 
@@ -38,7 +38,7 @@ Native Orchestration
 - `MainActivity.java`：文件选择、Surface 生命周期、播放控制、进度显示
 - `native-lib.cpp`：JNI 入口、线程创建与收束、全局播放状态、音画同步
 - `Demuxer.cpp/.h`：读取 `AVPacket`，分发到音频/视频队列，处理底层 seek
-- `Decoder.cpp/.h`：视频解码，将源帧转换为紧密 `YUV420P` 后写入 YUV 文件并送入渲染队列
+- `Decoder.cpp/.h`：视频解码，将源帧转换为紧密 `YUV420P` 后送入渲染队列，并在调试导出开启时写入 YUV 文件
 - `AudioRender.cpp/.h`：AAudio 输出、内部 PCM 队列、缓冲延迟估算
 - `videoRender.cpp/.h`：EGL/OpenGL ES 初始化、YUV 纹理上传、shader 转 RGB
 - `queue.cpp/.h`：基于 `mutex + condition_variable` 的线程安全队列
@@ -48,7 +48,7 @@ Native Orchestration
 运行播放时会启动四条主要 native 线程：
 
 1. Demux 线程：调用 `av_read_frame` 读取封装包，按 stream index 分发到音频/视频 `PacketQueue`。
-2. Video Decode 线程：从视频队列取包解码，使用 `sws_scale` 转为紧密 `YUV420P`，写入调试 YUV 文件并推入 `FrameQueue`。
+2. Video Decode 线程：从视频队列取包解码，使用 `sws_scale` 转为紧密 `YUV420P`，按需写入调试 YUV 文件并推入 `FrameQueue`。
 3. Audio Decode 线程：从音频队列取包解码，使用 `Swr` 转为 S16，再按播放速度进入 `atempo` 滤镜链，最后写入 AAudio 队列。
 4. Render 线程：从 `FrameQueue` 取视频帧，根据音频时钟节奏控制渲染并执行 `eglSwapBuffers`。
 
@@ -89,6 +89,8 @@ Seek 使用两阶段握手机制：
 - `FrameQueue::clear()` 清空后会通知等待线程，避免 seek/清队列后生产者继续阻塞。
 - Video Decode 不再假设源帧一定是紧密 `YUV420P`；现在统一用 `sws_scale` 转换后再写 YUV 和送渲染。
 - OpenGL 上传 U/V 平面时按 `(width + 1) / 2` 和 `(height + 1) / 2` 计算，兼容奇数宽高。
+- YUV 调试导出改为按需启用，默认播放路径不再持续写 `output.yuv`，降低长视频播放时的 I/O 和存储压力。
+- `SurfaceView` 销毁时会请求 native 会话停止，并在播放线程结束后释放 native window，避免旧 Surface 被继续使用。
 
 已验证：
 
@@ -167,6 +169,6 @@ app/
 ## 已知限制与后续方向
 
 - 选择视频时会先把 URI 内容复制到 cache，大视频会占用额外存储；后续可以改为基于 file descriptor 或自定义 AVIO 读取。
-- 播放过程会持续导出 `output.yuv`，适合调试但会增加 I/O 和存储压力；后续建议改成调试开关。
+- YUV 导出当前保留为 native 调试能力，默认 UI 播放路径关闭；后续可补一个显式调试开关。
 - 当前主要验证方式是构建、单元测试和 arm64 设备手动播放；native 同步链路仍需要更多端到端场景测试。
 - 释放路径仍以全局状态为主，后续可以进一步收敛为会话对象，减少全局裸指针和跨线程共享状态。

@@ -198,7 +198,13 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     /* ------------------------- 初始化阶段 ------------------------- */
     //获取输入输出路径
     const char *path = env->GetStringUTFChars(video_path, nullptr);
-    const char *outPath = env->GetStringUTFChars(output_path, nullptr);
+    const char *outPath = output_path ? env->GetStringUTFChars(output_path, nullptr) : nullptr;
+    auto releaseJniStrings = [&]() {
+        env->ReleaseStringUTFChars(video_path, path);
+        if (outPath) {
+            env->ReleaseStringUTFChars(output_path, outPath);
+        }
+    };
     g_isSeeking.store(false);
     g_seekApplied.store(false);
     g_paused.store(false);
@@ -214,8 +220,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     AVFormatContext *fmt_ctx = nullptr;
     if (avformat_open_input(&fmt_ctx, path, nullptr, nullptr) != 0) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not open input file: %s", path);
-        env->ReleaseStringUTFChars(video_path, path);
-        env->ReleaseStringUTFChars(output_path, outPath);
+        releaseJniStrings();
         return;
     }
 
@@ -225,15 +230,13 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     if (video_stream_index < 0 && audio_stream_index < 0) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "No video or audio stream found");
         avformat_close_input(&fmt_ctx);
-        env->ReleaseStringUTFChars(video_path, path);
-        env->ReleaseStringUTFChars(output_path, outPath);
+        releaseJniStrings();
         return;
     }
     if (video_stream_index < 0) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "No video stream found");
         avformat_close_input(&fmt_ctx);
-        env->ReleaseStringUTFChars(video_path, path);
-        env->ReleaseStringUTFChars(output_path, outPath);
+        releaseJniStrings();
         return;
     }
     if (fmt_ctx->duration != AV_NOPTS_VALUE && fmt_ctx->duration > 0) {
@@ -245,8 +248,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     if (!codec) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Decoder not found");
         avformat_close_input(&fmt_ctx);
-        env->ReleaseStringUTFChars(video_path, path);
-        env->ReleaseStringUTFChars(output_path, outPath);
+        releaseJniStrings();
         return;
     }
     AVCodecContext *codec_ctx = avcodec_alloc_context3(codec);
@@ -255,8 +257,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not open codec");
         avcodec_free_context(&codec_ctx);
         avformat_close_input(&fmt_ctx);
-        env->ReleaseStringUTFChars(video_path, path);
-        env->ReleaseStringUTFChars(output_path, outPath);
+        releaseJniStrings();
         return;
     }
     //初始化音频解码器
@@ -290,21 +291,17 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         }
     }
 
-    // 4. 打开输出文件
-    FILE *yuv_file = fopen(outPath, "wb");
-    if (!yuv_file) {
-        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Failed to open output file at %s", outPath);
-        if (g_audioRenderer) {
-            g_audioRenderer->stop();
-            delete g_audioRenderer;
-            g_audioRenderer = nullptr;
+    // 4. 按需打开调试 YUV 输出文件
+    FILE *yuv_file = nullptr;
+    bool yuvExportEnabled = outPath && outPath[0] != '\0';
+    if (yuvExportEnabled) {
+        yuv_file = fopen(outPath, "wb");
+        if (!yuv_file) {
+            __android_log_print(ANDROID_LOG_ERROR, LOG_TAG,
+                                "Failed to open YUV output file at %s, continue without export",
+                                outPath);
+            yuvExportEnabled = false;
         }
-        avcodec_free_context(&audio_codec_ctx);
-        avcodec_free_context(&codec_ctx);
-        avformat_close_input(&fmt_ctx);
-        env->ReleaseStringUTFChars(video_path, path);
-        env->ReleaseStringUTFChars(output_path, outPath);
-        return;
     }
     /* ------------------------- 线程创建阶段 ------------------------- */
     g_sessionActive.store(true);
@@ -746,7 +743,11 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     audioDecodeThread.join();
     renderThread.join();//之所以放在这里等待进程结束，是为了观察yuv文件何时生成
 
-    LOGD("视频解析完成，输出文件: %s", outPath);
+    if (yuvExportEnabled) {
+        LOGD("视频解析完成，输出文件: %s", outPath);
+    } else {
+        LOGD("视频解析完成，未导出YUV文件");
+    }
 
     if (g_audioRenderer) {
         g_audioRenderer->stop();
@@ -755,7 +756,9 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     }
 
     // 7. 关闭文件
-    fclose(yuv_file);
+    if (yuv_file) {
+        fclose(yuv_file);
+    }
     avcodec_free_context(&audio_codec_ctx);
     avcodec_free_context(&codec_ctx);
     avformat_close_input(&fmt_ctx);
@@ -765,15 +768,14 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     if (cls != nullptr) {
         jmethodID method = env->GetMethodID(cls, "onVideoDecoded", "(Ljava/lang/String;)V");
         if (method != nullptr) {
-            jstring result = env->NewStringUTF(outPath);
+            jstring result = env->NewStringUTF(yuvExportEnabled ? outPath : "播放完成");
             env->CallVoidMethod(thiz, method, result);
             env->DeleteLocalRef(result);
         }
         env->DeleteLocalRef(cls);
     }
 
-    env->ReleaseStringUTFChars(video_path, path);
-    env->ReleaseStringUTFChars(output_path, outPath);
+    releaseJniStrings();
     g_sessionActive.store(false);
 }
 

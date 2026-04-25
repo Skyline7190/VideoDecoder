@@ -160,6 +160,11 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void surfaceDestroyed(SurfaceHolder holder) {
                     isSurfaceReady = false;
+                    if (isDecodeRunning()) {
+                        nativeReleaseAudio();
+                    } else {
+                        setSurface(null);
+                    }
                 }
             });
         } else {
@@ -218,20 +223,16 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
             if (videoPath != null) {
-                // 获取应用私有目录下的输出路径
-                File externalDir = getExternalFilesDir(null);
-                if (externalDir == null) {
-                    Toast.makeText(this, "无法访问应用存储目录", Toast.LENGTH_SHORT).show();
-                    return;
-                }
-                String outputPath = new File(externalDir, "output.yuv").getAbsolutePath();
                 setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PLAYING);
                 decodeThread = new Thread(() -> {
                     runOnUiThread(() -> tv.setText("正在解析视频..."));
                     try {
-                        decodeVideo(videoPath, outputPath);
+                        decodeVideo(videoPath, null);
                     } finally {
                         decodeThread = null;
+                        if (!isSurfaceReady) {
+                            setSurface(null);
+                        }
                         setPlaybackUiState(videoPath == null
                                 ? PlaybackUiPolicy.PlaybackUiState.IDLE
                                 : PlaybackUiPolicy.PlaybackUiState.READY);
@@ -350,9 +351,11 @@ public class MainActivity extends AppCompatActivity {
     /* ----------------- 回调方法 ----------------- */
     public void onVideoDecoded(final String result) {
         runOnUiThread(() -> {
-            tv.append("\n" + result);
+            if (result != null && !result.isEmpty()) {
+                tv.append("\n" + result);
+            }
             // 添加YUV文件路径显示
-            if(result.contains("YUV")) {
+            if(result != null && result.endsWith(".yuv")) {
                 Toast.makeText(this, "YUV文件已生成: " + result, Toast.LENGTH_LONG).show();
             }
         });
