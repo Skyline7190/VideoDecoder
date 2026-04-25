@@ -91,6 +91,7 @@ Seek 使用两阶段握手机制：
 - OpenGL 上传 U/V 平面时按 `(width + 1) / 2` 和 `(height + 1) / 2` 计算，兼容奇数宽高。
 - YUV 调试导出改为按需启用，默认播放路径不再持续写 `output.yuv`，降低长视频播放时的 I/O 和存储压力。
 - `SurfaceView` 销毁时会请求 native 会话停止，并在播放线程结束后释放 native window，避免旧 Surface 被继续使用。
+- 视频输入不再完整复制到 cache；Java 层通过 `ParcelFileDescriptor` 打开 SAF Uri，并把 `fd:<number>` 交给 native 自定义 AVIO，避免大视频启动前的整文件复制成本。
 
 已验证：
 
@@ -168,7 +169,7 @@ app/
 
 ## 已知限制与后续方向
 
-- 选择视频时会先把 URI 内容复制到 cache，大视频会占用额外存储；后续可以改为基于 file descriptor 或自定义 AVIO 读取。
+- 视频输入当前通过 native 自定义 AVIO 直接读取已授权 fd。少数内容提供方如果返回不可 seek 的 fd，Seek 能力可能受限。
 - YUV 导出当前保留为 native 调试能力，默认 UI 播放路径关闭；后续可补一个显式调试开关。
 - 当前主要验证方式是构建、单元测试和 arm64 设备手动播放；native 同步链路仍需要更多端到端场景测试。
 - 释放路径仍以全局状态为主，后续可以进一步收敛为会话对象，减少全局裸指针和跨线程共享状态。

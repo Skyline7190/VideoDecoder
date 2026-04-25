@@ -8,6 +8,7 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import android.view.Surface;
 import android.view.SurfaceHolder;
@@ -16,12 +17,7 @@ import android.widget.Button;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
-import java.io.File;
-
-import java.io.FileOutputStream;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
@@ -29,7 +25,7 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG = "VideoDecoderMainActivity";
     /* ----------------- 成员变量 ----------------- */
     private TextView tv;
-    private String videoPath;
+    private Uri videoUri;
     private volatile PlaybackUiPolicy.PlaybackUiState playbackUiState = PlaybackUiPolicy.PlaybackUiState.IDLE;
     private Thread decodeThread;
 
@@ -48,6 +44,7 @@ public class MainActivity extends AppCompatActivity {
     private TextView totalTimeText;
     private boolean isSeeking = false;
     private volatile boolean isSurfaceReady = false;
+    private volatile boolean isDestroyed = false;
     private final ActivityResultLauncher<String[]> videoPickerLauncher =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), this::handlePickedVideo);
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
@@ -222,20 +219,31 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "渲染界面尚未就绪，请稍后重试", Toast.LENGTH_SHORT).show();
                 return;
             }
-            if (videoPath != null) {
+            if (videoUri != null) {
+                final Uri selectedUri = videoUri;
                 setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PLAYING);
                 decodeThread = new Thread(() -> {
                     runOnUiThread(() -> tv.setText("正在解析视频..."));
                     try {
-                        decodeVideo(videoPath, null);
+                        try (ParcelFileDescriptor videoFd = openVideoFileDescriptor(selectedUri)) {
+                            decodeVideo("fd:" + videoFd.getFd(), null);
+                        }
+                    } catch (IOException e) {
+                        Log.e(TAG, "Failed to open selected video file descriptor", e);
+                        runOnUiThread(() -> {
+                            tv.setText("无法读取文件");
+                            Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show();
+                        });
                     } finally {
                         decodeThread = null;
                         if (!isSurfaceReady) {
                             setSurface(null);
                         }
-                        setPlaybackUiState(videoPath == null
-                                ? PlaybackUiPolicy.PlaybackUiState.IDLE
-                                : PlaybackUiPolicy.PlaybackUiState.READY);
+                        if (!isDestroyed) {
+                            setPlaybackUiState(videoUri == null
+                                    ? PlaybackUiPolicy.PlaybackUiState.IDLE
+                                    : PlaybackUiPolicy.PlaybackUiState.READY);
+                        }
                     }
                 }, "video-decode-runner");
                 decodeThread.start();
@@ -275,11 +283,16 @@ public class MainActivity extends AppCompatActivity {
         if (uri == null) {
             return;
         }
+        if (isDecodeRunning()) {
+            Toast.makeText(this, "正在解析中，请稍候", Toast.LENGTH_SHORT).show();
+            return;
+        }
         try {
-            // 将 URI 的内容复制到临时文件
-            String tempFilePath = copyUriToTempFile(uri);
-            videoPath = tempFilePath;
-            tv.setText("已选择视频：" + videoPath);
+            // Validate the descriptor once so playback can fail early on unreadable providers.
+            try (ParcelFileDescriptor ignored = openVideoFileDescriptor(uri)) {
+                videoUri = uri;
+            }
+            tv.setText("已选择视频：" + uri);
             updateProgress(0, 0);
             setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.READY);
         } catch (IOException e) {
@@ -296,21 +309,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
     /* ----------------- 文件操作辅助方法 ----------------- */
-    private String copyUriToTempFile(Uri uri) throws IOException {
-        File tempFile = File.createTempFile("temp", "mp4", getCacheDir());
-        tempFile.deleteOnExit();
-        try (InputStream inputStream = getContentResolver().openInputStream(uri);
-             OutputStream outputStream = new FileOutputStream(tempFile)) {
-            if (inputStream == null) {
-                throw new IOException("无法打开输入流");
-            }
-            byte[] buffer = new byte[4096];
-            int bytesRead;
-            while ((bytesRead = inputStream.read(buffer)) != -1) {
-                outputStream.write(buffer, 0, bytesRead);
-            }
+    private ParcelFileDescriptor openVideoFileDescriptor(Uri uri) throws IOException {
+        ParcelFileDescriptor descriptor = getContentResolver().openFileDescriptor(uri, "r");
+        if (descriptor == null) {
+            throw new IOException("无法打开文件描述符");
         }
-        return tempFile.getAbsolutePath();
+        return descriptor;
     }
 
     private boolean isDecodeRunning() {
@@ -363,12 +367,13 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        isDestroyed = true;
         progressHandler.removeCallbacks(progressUpdater);
         if (decodeThread != null && decodeThread.isAlive()) {
             decodeThread.interrupt();
         }
         isSurfaceReady = false;
-        setPlaybackUiState(videoPath == null
+        setPlaybackUiState(videoUri == null
                 ? PlaybackUiPolicy.PlaybackUiState.IDLE
                 : PlaybackUiPolicy.PlaybackUiState.READY);
         // 释放 Native 层音频资源
