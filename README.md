@@ -81,6 +81,7 @@ flowchart TB
 - `native-lib.cpp`：JNI 入口、`PlaybackSession` 会话上下文、线程创建与收束、音画同步
 - `PlaybackState.h`：播放控制、Seek、时钟、进度和倍速等单次播放状态
 - `MediaInput.cpp/.h`：普通路径和 `fd:` 输入封装，管理自定义 AVIO、fd 复制和输入资源释放
+- `NativeEgl.cpp/.h`：EGL display、window surface、context 初始化与清理
 - `Demuxer.cpp/.h`：读取 `AVPacket`，分发到音频/视频队列，处理底层 seek
 - `Decoder.cpp/.h`：视频解码，将源帧转换为紧密 `YUV420P` 后送入渲染队列，并在调试导出开启时写入 YUV 文件
 - `AudioRender.cpp/.h`：AAudio 输出、内部 PCM 队列、缓冲延迟估算
@@ -214,7 +215,8 @@ flowchart TB
     SurfaceCall["setSurface 调用"] --> WindowLock["g_nativeWindowMutex"]
     WindowLock --> SharedWindow["NativeWindowPtr(shared_ptr + ANativeWindow_release)"]
     SharedWindow --> RenderSnapshot["Render 线程复制窗口快照"]
-    RenderSnapshot --> EGLSurface["EGLSurface"]
+    RenderSnapshot --> NativeEgl["NativeEgl"]
+    NativeEgl --> EGLSurface["EGLSurface / EGLContext"]
 
     Stop["停止请求"] --> Wake["notifyAll / FrameQueue terminate"]
     Wake --> Join["join demux / decode / audio / render"]
@@ -239,6 +241,7 @@ flowchart TB
 - `decodeVideo()` 的 JNI 字符串、AVIO/fd、codec context 和 YUV 文件清理改为 `ScopeExit` 管理，减少初始化失败或早退分支漏释放资源的风险。
 - 清理未使用的单队列 `Demuxer::demux()` 重载和 `Decoder` 内部冗余 `FrameQueue` 成员，缩小 native 模块维护面。
 - 普通文件路径和 SAF `fd:` 输入已抽到 `MediaInput`，`native-lib.cpp` 不再直接维护 custom AVIO/fd 打开与释放细节。
+- EGL display、surface、context 初始化与清理已抽到 `NativeEgl`，进一步减薄 `native-lib.cpp` 的平台渲染细节。
 
 已验证：
 
@@ -294,6 +297,7 @@ app/
 ├─ src/main/cpp/
 │  ├─ native-lib.cpp
 │  ├─ MediaInput.cpp/.h
+│  ├─ NativeEgl.cpp/.h
 │  ├─ Demuxer.cpp/.h
 │  ├─ Decoder.cpp/.h
 │  ├─ queue.cpp/.h

@@ -20,6 +20,7 @@ add_library(
         SHARED
         native-lib.cpp    # JNI入口
         MediaInput.cpp    # 输入文件/FD封装
+        NativeEgl.cpp     # EGL/Surface封装
         Demuxer.cpp      # 解复用器
         Decoder.cpp      # 解码器
         queue.cpp        # 线程安全队列

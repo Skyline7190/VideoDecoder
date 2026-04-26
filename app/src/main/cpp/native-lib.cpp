@@ -13,6 +13,7 @@
 #include <utility>
 #include "PlaybackState.h"
 #include "MediaInput.h"
+#include "NativeEgl.h"
 #include "Demuxer.h"
 #include "Decoder.h"
 #include "queue.h"
@@ -21,9 +22,7 @@
 #include "libswresample/swresample.h"
 #include <atomic>
 //渲染相关头文件
-#include <EGL/egl.h>
 #include <GLES3/gl3.h>
-#include <EGL/eglext.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h> //用于ANativeWindow_fromSurface
 //日志宏定义
@@ -111,116 +110,6 @@ inline float sanitizePlaybackSpeed(float speed) {
     return speed;
 }
 
-/* ========================== EGL 相关函数 ========================== */
-// 初始化 EGLDisplay
-EGLDisplay initEGLDisplay() {
-    EGLDisplay display = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (display == EGL_NO_DISPLAY) {
-        LOGE("eglGetDisplay failed");
-        return EGL_NO_DISPLAY;
-    }
-
-    EGLint major, minor;
-    if (eglInitialize(display, &major, &minor) != EGL_TRUE) {
-        LOGE("eglInitialize failed");
-        return EGL_NO_DISPLAY;
-    }
-
-    return display;
-}
-//创建 EGL 配置属性
-EGLSurface createEGLSurface(EGLDisplay display, ANativeWindow* window) {
-    EGLint configAttribs[] = {
-            EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, // 尝试使用 OpenGL ES 2.x
-            EGL_BLUE_SIZE, 8,
-            EGL_GREEN_SIZE, 8,
-            EGL_RED_SIZE, 8,
-            EGL_ALPHA_SIZE, 8,
-            EGL_DEPTH_SIZE, 16,
-            EGL_NONE
-    };
-
-    EGLConfig config;
-    EGLint numConfigs;
-    if (eglChooseConfig(display, configAttribs, &config, 1, &numConfigs) != EGL_TRUE || numConfigs == 0) {
-        LOGE("eglChooseConfig failed");
-        return EGL_NO_SURFACE;
-    }
-
-    EGLSurface surface = eglCreateWindowSurface(display, config, window, nullptr);
-    if (surface == EGL_NO_SURFACE) {
-        LOGE("eglCreateWindowSurface failed");
-        return EGL_NO_SURFACE;
-    }
-
-    return surface;
-}
-//创建 EGL 上下文
-EGLContext createEGLContext(EGLDisplay display, EGLSurface surface) {
-    EGLint configAttribs[] = {
-            EGL_CONTEXT_CLIENT_VERSION, 2, // 使用 OpenGL ES 2.x
-            EGL_NONE
-    };
-
-    EGLint numConfigs;
-    EGLConfig config;
-    EGLint configSpec[] = {
-            EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
-            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
-            EGL_RED_SIZE, 8,
-            EGL_GREEN_SIZE, 8,
-            EGL_BLUE_SIZE, 8,
-            EGL_ALPHA_SIZE, 8,
-            EGL_DEPTH_SIZE, 24,
-            EGL_STENCIL_SIZE, 8,
-            EGL_NONE
-    };
-
-    // 获取符合要求的配置数量
-    if (eglChooseConfig(display, configSpec, nullptr, 0, &numConfigs) == EGL_FALSE) {
-        LOGE("eglChooseConfig failed to get number of configs");
-        return EGL_NO_CONTEXT;
-    }
-
-    // 获取符合要求的配置列表
-    EGLConfig* configs = new EGLConfig[numConfigs];
-    if (eglChooseConfig(display, configSpec, configs, numConfigs, &numConfigs) == EGL_FALSE) {
-        LOGE("eglChooseConfig failed to get configs");
-        delete[] configs;
-        return EGL_NO_CONTEXT;
-    }
-
-    // 选择第一个配置
-    config = configs[0];
-    delete[] configs;
-    // 定义上下文属性
-    EGLint contextAttribs[] = {
-            EGL_CONTEXT_CLIENT_VERSION, 2, // 使用 OpenGL ES 2.x
-            EGL_NONE
-    };
-    // 创建 EGL 上下文
-    EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, contextAttribs);
-    if (context == EGL_NO_CONTEXT) {
-        LOGE("eglCreateContext failed");
-        return EGL_NO_CONTEXT;
-    }
-
-    // 绑定上下文
-    if (eglMakeCurrent(display, surface, surface, context) != EGL_TRUE) {
-        LOGE("eglMakeCurrent failed");
-        return EGL_NO_CONTEXT;
-    }
-
-    return context;
-}
-//清理EGL资源
-void cleanupEGL(EGLDisplay display, EGLSurface surface, EGLContext context) {
-    eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-    eglDestroyContext(display, context);
-    eglDestroySurface(display, surface);
-    eglTerminate(display);
-}
 // 设置Surface接口
 extern "C" {
 JNIEXPORT void JNICALL
