@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <functional>
+#include <utility>
 #include <unistd.h>
 #include "PlaybackState.h"
 #include "Demuxer.h"
@@ -53,6 +55,23 @@ struct NativeWindowDeleter {
 
 using NativeWindowPtr = std::shared_ptr<ANativeWindow>;
 
+class ScopeExit {
+public:
+    explicit ScopeExit(std::function<void()> cleanup) : cleanup_(std::move(cleanup)) {}
+    ~ScopeExit() {
+        if (active_) {
+            cleanup_();
+        }
+    }
+
+    ScopeExit(const ScopeExit&) = delete;
+    ScopeExit& operator=(const ScopeExit&) = delete;
+
+private:
+    std::function<void()> cleanup_;
+    bool active_ = true;
+};
+
 // 全局变量，用于保存 Java 层传入的 Surface 对应的 NativeWindow
 NativeWindowPtr g_nativeWindow;
 std::mutex g_nativeWindowMutex;
@@ -78,6 +97,13 @@ std::shared_ptr<PlaybackState> getCurrentPlaybackState() {
 void setCurrentPlaybackState(const std::shared_ptr<PlaybackState>& state) {
     std::lock_guard<std::mutex> lock(g_playbackStateMutex);
     g_currentPlaybackState = state;
+}
+
+void clearCurrentPlaybackState(const std::shared_ptr<PlaybackState>& state) {
+    std::lock_guard<std::mutex> lock(g_playbackStateMutex);
+    if (g_currentPlaybackState == state) {
+        g_currentPlaybackState.reset();
+    }
 }
 
 inline float sanitizePlaybackSpeed(float speed) {
@@ -275,17 +301,29 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     /* ------------------------- 初始化阶段 ------------------------- */
     //获取输入输出路径
     const char *path = env->GetStringUTFChars(video_path, nullptr);
+    if (!path) {
+        LOGE("Failed to read video path from Java string");
+        return;
+    }
     const char *outPath = output_path ? env->GetStringUTFChars(output_path, nullptr) : nullptr;
-    auto releaseJniStrings = [&]() {
+    if (output_path && !outPath) {
+        env->ReleaseStringUTFChars(video_path, path);
+        LOGE("Failed to read output path from Java string");
+        return;
+    }
+    ScopeExit releaseJniStrings([&]() {
         env->ReleaseStringUTFChars(video_path, path);
         if (outPath) {
             env->ReleaseStringUTFChars(output_path, outPath);
         }
-    };
+    });
     PlaybackSession session;
     auto state = session.state;
     state->resetForNewPlayback();
     setCurrentPlaybackState(state);
+    ScopeExit currentStateCleanup([&]() {
+        clearCurrentPlaybackState(state);
+    });
 
     LOGD("开始解析视频: %s", path);
 
@@ -313,6 +351,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         delete fdSource;
         fdSource = nullptr;
     };
+    ScopeExit inputCleanup(closeInput);
 
     int openInputRet = 0;
     if (strncmp(path, "fd:", 3) == 0) {
@@ -364,8 +403,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
     if (openInputRet != 0) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not open input file: %s", path);
-        closeInput();
-        releaseJniStrings();
         return;
     }
 
@@ -374,14 +411,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     int audio_stream_index = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     if (video_stream_index < 0 && audio_stream_index < 0) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "No video or audio stream found");
-        closeInput();
-        releaseJniStrings();
         return;
     }
     if (video_stream_index < 0) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "No video stream found");
-        closeInput();
-        releaseJniStrings();
         return;
     }
     if (fmt_ctx->duration != AV_NOPTS_VALUE && fmt_ctx->duration > 0) {
@@ -392,29 +425,41 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     AVCodec *codec = avcodec_find_decoder(fmt_ctx->streams[video_stream_index]->codecpar->codec_id);
     if (!codec) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Decoder not found");
-        closeInput();
-        releaseJniStrings();
         return;
     }
     AVCodecContext *codec_ctx = avcodec_alloc_context3(codec);
-    avcodec_parameters_to_context(codec_ctx, fmt_ctx->streams[video_stream_index]->codecpar);
+    ScopeExit videoCodecCleanup([&]() {
+        avcodec_free_context(&codec_ctx);
+    });
+    if (!codec_ctx) {
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not allocate codec context");
+        return;
+    }
+    if (avcodec_parameters_to_context(codec_ctx, fmt_ctx->streams[video_stream_index]->codecpar) < 0) {
+        __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not copy video codec parameters");
+        return;
+    }
     if (avcodec_open2(codec_ctx, codec, nullptr) < 0) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not open codec");
-        avcodec_free_context(&codec_ctx);
-        closeInput();
-        releaseJniStrings();
         return;
     }
     //初始化音频解码器
     AVCodecContext *audio_codec_ctx = nullptr;
+    ScopeExit audioCodecCleanup([&]() {
+        avcodec_free_context(&audio_codec_ctx);
+    });
     if (audio_stream_index >= 0) {
         AVCodec *audio_codec = avcodec_find_decoder(fmt_ctx->streams[audio_stream_index]->codecpar->codec_id);
         if (!audio_codec) {
             __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Audio decoder not found");
         } else {
             audio_codec_ctx = avcodec_alloc_context3(audio_codec);
-            avcodec_parameters_to_context(audio_codec_ctx, fmt_ctx->streams[audio_stream_index]->codecpar);
-            if (avcodec_open2(audio_codec_ctx, audio_codec, nullptr) < 0) {
+            if (!audio_codec_ctx) {
+                __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not allocate audio codec context");
+            } else if (avcodec_parameters_to_context(audio_codec_ctx, fmt_ctx->streams[audio_stream_index]->codecpar) < 0) {
+                __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not copy audio codec parameters");
+                avcodec_free_context(&audio_codec_ctx);
+            } else if (avcodec_open2(audio_codec_ctx, audio_codec, nullptr) < 0) {
                 __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not open audio codec");
                 avcodec_free_context(&audio_codec_ctx);
             } else {
@@ -438,6 +483,12 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
     // 4. 按需打开调试 YUV 输出文件
     FILE *yuv_file = nullptr;
+    ScopeExit yuvFileCleanup([&]() {
+        if (yuv_file) {
+            fclose(yuv_file);
+            yuv_file = nullptr;
+        }
+    });
     bool yuvExportEnabled = outPath && outPath[0] != '\0';
     if (yuvExportEnabled) {
         yuv_file = fopen(outPath, "wb");
@@ -908,15 +959,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         session.audioRenderer.reset();
     }
 
-    // 7. 关闭文件
-    if (yuv_file) {
-        fclose(yuv_file);
-    }
-    avcodec_free_context(&audio_codec_ctx);
-    avcodec_free_context(&codec_ctx);
-    closeInput();
-
-    // 8. 通知 Java 解码完成（只通知一次）
+    // 7. 通知 Java 解码完成（只通知一次）
     jclass cls = env->GetObjectClass(thiz);
     if (cls != nullptr) {
         jmethodID method = env->GetMethodID(cls, "onVideoDecoded", "(Ljava/lang/String;)V");
@@ -927,8 +970,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         }
         env->DeleteLocalRef(cls);
     }
-
-    releaseJniStrings();
 }
 
 JNIEXPORT jstring JNICALL

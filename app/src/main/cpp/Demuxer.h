@@ -14,15 +14,10 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
-extern "C" {
-
-}
-
 class PacketQueue;
 
 class Demuxer {
 public:
-    void demux(AVFormatContext* fmt_ctx, int video_stream_index, PacketQueue& queue, PlaybackState& state);
     void demux(AVFormatContext* fmt_ctx,
                int video_stream_index, PacketQueue& video_queue,
                int audio_stream_index, PacketQueue& audio_queue,

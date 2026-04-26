@@ -21,9 +21,6 @@ class Decoder {
 public:
     void decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& queue,
                 FrameQueue& frameQueue, PlaybackState& state);
-private:
-    FrameQueue frameQueue;  // 声明 FrameQueue 成员变量
-
 };
 
 

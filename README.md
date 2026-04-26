@@ -215,7 +215,7 @@ flowchart TB
 
     Stop["停止请求"] --> Wake["notifyAll / FrameQueue terminate"]
     Wake --> Join["join demux / decode / audio / render"]
-    Join --> Cleanup["释放 session、EGL、AVCodec、AVIO"]
+    Join --> Cleanup["ScopeExit 释放 session、EGL、AVCodec、AVIO、fd"]
 ```
 
 ## 最近稳定性优化
@@ -233,6 +233,8 @@ flowchart TB
 - Native 播放队列和 `AudioRenderer` 已收敛进 `PlaybackSession`，移除了全局 `g_audioRenderer` 和 `g_sessionActive`，降低跨会话裸指针和释放顺序风险。
 - `ANativeWindow` 已改为带释放器的共享句柄，Render 线程使用窗口快照，避免 Surface 生命周期变化时继续读写悬空全局指针。
 - 播放控制、Seek、时钟、进度和倍速状态已收敛进 `PlaybackState`，`Demuxer`、`Decoder`、`PacketQueue`、`AudioRenderer` 不再通过 `extern` 读取全局播放状态。
+- `decodeVideo()` 的 JNI 字符串、AVIO/fd、codec context 和 YUV 文件清理改为 `ScopeExit` 管理，减少初始化失败或早退分支漏释放资源的风险。
+- 清理未使用的单队列 `Demuxer::demux()` 重载和 `Decoder` 内部冗余 `FrameQueue` 成员，缩小 native 模块维护面。
 
 已验证：
 

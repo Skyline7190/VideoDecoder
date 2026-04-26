@@ -5,21 +5,6 @@
 #include "Demuxer.h"
 #include "queue.h"
 #include <libavutil/error.h>
-//单队列
-void Demuxer::demux(AVFormatContext* fmt_ctx, int video_stream_index, PacketQueue& queue, PlaybackState& state) {
-    AVPacket *pkt = av_packet_alloc();
-    while (!state.stopRequested.load() && av_read_frame(fmt_ctx, pkt) >= 0) {
-        if (pkt->stream_index == video_stream_index) {
-            AVPacket *pktCopy = av_packet_alloc();
-            av_packet_ref(pktCopy, pkt);
-            queue.push(pktCopy);
-        }
-        av_packet_unref(pkt);
-    }
-    av_packet_free(&pkt);
-    queue.setDemuxFinished(true);
-    queue.notifyAll();
-}
 //双队列
 void Demuxer::demux(AVFormatContext* fmt_ctx,
                     int video_stream_index, PacketQueue& video_queue,
