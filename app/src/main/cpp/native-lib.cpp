@@ -9,9 +9,9 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
-#include <functional>
-#include <utility>
 #include "PlaybackState.h"
+#include "ScopeExit.h"
+#include "JniStringChars.h"
 #include "MediaInput.h"
 #include "NativeEgl.h"
 #include "NativeWindowHolder.h"
@@ -41,23 +41,6 @@ extern "C" {
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 /* ========================== 全局变量声明 ========================== */
-class ScopeExit {
-public:
-    explicit ScopeExit(std::function<void()> cleanup) : cleanup_(std::move(cleanup)) {}
-    ~ScopeExit() {
-        if (active_) {
-            cleanup_();
-        }
-    }
-
-    ScopeExit(const ScopeExit&) = delete;
-    ScopeExit& operator=(const ScopeExit&) = delete;
-
-private:
-    std::function<void()> cleanup_;
-    bool active_ = true;
-};
-
 NativeWindowHolder g_nativeWindowHolder;
 std::shared_ptr<PlaybackState> g_currentPlaybackState;
 std::mutex g_playbackStateMutex;
@@ -109,23 +92,18 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                                                        jstring video_path, jstring output_path) {
     /* ------------------------- 初始化阶段 ------------------------- */
     //获取输入输出路径
-    const char *path = env->GetStringUTFChars(video_path, nullptr);
-    if (!path) {
+    JniStringChars videoPath(env, video_path);
+    if (!videoPath.hasValue()) {
         LOGE("Failed to read video path from Java string");
         return;
     }
-    const char *outPath = output_path ? env->GetStringUTFChars(output_path, nullptr) : nullptr;
-    if (output_path && !outPath) {
-        env->ReleaseStringUTFChars(video_path, path);
+    JniStringChars outputPath(env, output_path);
+    if (!outputPath.valid()) {
         LOGE("Failed to read output path from Java string");
         return;
     }
-    ScopeExit releaseJniStrings([&]() {
-        env->ReleaseStringUTFChars(video_path, path);
-        if (outPath) {
-            env->ReleaseStringUTFChars(output_path, outPath);
-        }
-    });
+    const char *path = videoPath.c_str();
+    const char *outPath = outputPath.c_str();
     PlaybackSession session;
     auto state = session.state;
     state->resetForNewPlayback();
