@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="state_undergo_chip_bg">#663A6D9B</color>
+    <color name="state_undergo_chip_text">#CFE6FF</color>
+    <color name="state_undergo_card_bg">#1E344A</color>
+    <color name="state_undergo_button_bg">#5F99CD</color>
+    <color name="state_undergo_button_text">#06233C</color>
+
+    <color name="state_near_chip_bg">#6659361D</color>
+    <color name="state_near_chip_text">#FFD9B3</color>
+    <color name="state_near_card_bg">#3A2A1E</color>
+    <color name="state_near_button_bg">#D08B52</color>
+    <color name="state_near_button_text">#351D08</color>
+
+    <color name="state_passed_chip_bg">#66573939</color>
+    <color name="state_passed_chip_text">#FFCCCC</color>
+    <color name="state_passed_card_bg">#3E2727</color>
+    <color name="state_passed_button_bg">#D07474</color>
+    <color name="state_passed_button_text">#391313</color>
+
+    <color name="state_completed_chip_bg">#66305A51</color>
+    <color name="state_completed_chip_text">#C7F0E6</color>
+    <color name="state_completed_card_bg">#1F3D37</color>
+    <color name="state_completed_button_bg">#66B8A5</color>
+    <color name="state_completed_button_text">#082C25</color>
+</resources>

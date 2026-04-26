@@ -3,63 +3,134 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="?attr/colorSurface"
+    android:background="@drawable/bg_deadliner_surface"
     android:fillViewport="true">
 
     <LinearLayout
+        android:id="@+id/content_container"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="16dp">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Video Decoder"
-            android:textColor="?attr/colorOnSurface"
-            android:textSize="24sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="Native Player · FFmpeg · OpenGL ES · AAudio"
-            android:textColor="?attr/colorOnSurfaceVariant"
-            android:textSize="12sp" />
-
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/header_card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            app:cardBackgroundColor="?attr/colorSurfaceContainer"
-            app:cardCornerRadius="20dp"
-            app:strokeColor="?attr/colorOutlineVariant"
+            app:cardBackgroundColor="?attr/colorPrimaryContainer"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutline"
             app:strokeWidth="1dp">
-
-            <SurfaceView
-                android:id="@+id/surface_view"
-                android:layout_width="match_parent"
-                android:layout_height="220dp" />
-        </com.google.android.material.card.MaterialCardView>
-
-        <com.google.android.material.card.MaterialCardView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
-            app:cardCornerRadius="16dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="12dp">
+                android:padding="16dp">
+
+                <TextView
+                    android:id="@+id/header_status_chip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:background="@drawable/bg_deadliner_chip"
+                    android:paddingStart="10dp"
+                    android:paddingTop="4dp"
+                    android:paddingEnd="10dp"
+                    android:paddingBottom="4dp"
+                    android:text="UNDERGO"
+                    android:textColor="?attr/colorPrimary"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:text="Video Decoder"
+                    android:textColor="?attr/colorOnPrimaryContainer"
+                    android:textSize="28sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Native Player · FFmpeg · OpenGL ES · AAudio"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:textSize="13sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/preview_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            app:cardBackgroundColor="?attr/colorSurfaceContainerHigh"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutline"
+            app:strokeWidth="1dp">
+
+            <FrameLayout
+                android:layout_width="match_parent"
+                android:layout_height="220dp">
+
+                <SurfaceView
+                    android:id="@+id/surface_view"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <TextView
+                    android:id="@+id/preview_status_chip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|start"
+                    android:layout_marginStart="12dp"
+                    android:layout_marginTop="12dp"
+                    android:background="@drawable/bg_deadliner_chip"
+                    android:paddingStart="10dp"
+                    android:paddingTop="4dp"
+                    android:paddingEnd="10dp"
+                    android:paddingBottom="4dp"
+                    android:text="Render Surface"
+                    android:textColor="?attr/colorPrimary"
+                    android:textSize="11sp"
+                    android:textStyle="bold" />
+            </FrameLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/progress_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            app:cardBackgroundColor="?attr/colorSurfaceContainer"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutline"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Playback Progress"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
 
                 <SeekBar
                     android:id="@+id/seek_bar"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
                     android:progressTint="?attr/colorPrimary"
                     android:thumbTint="?attr/colorPrimary" />
 
@@ -89,111 +160,168 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <LinearLayout
-            android:id="@+id/speed_layout"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:orientation="horizontal">
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/speed_05"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:text="x0.5"
-                android:textAllCaps="false" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/speed_1"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:text="x1"
-                android:textAllCaps="false" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/speed_2"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:text="x2"
-                android:textAllCaps="false" />
-
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/speed_3"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_weight="1"
-                android:text="x3"
-                android:textAllCaps="false" />
-        </LinearLayout>
-
-        <LinearLayout
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/speed_card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="10dp"
-            android:orientation="horizontal">
+            app:cardBackgroundColor="?attr/colorSurfaceContainer"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutline"
+            app:strokeWidth="1dp">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/play_button"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:text="播放"
-                android:textAllCaps="false" />
+            <LinearLayout
+                android:id="@+id/speed_layout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/pause_button"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_weight="1"
-                android:text="暂停"
-                android:textAllCaps="false" />
-        </LinearLayout>
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="Speed"
+                    android:textColor="?attr/colorOnSurface"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="10dp"
-            android:orientation="horizontal">
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/select_video_button"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_marginEnd="8dp"
-                android:layout_weight="1"
-                android:text="选择视频"
-                android:textAllCaps="false" />
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/speed_05"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:text="x0.5"
+                        android:textAllCaps="false"
+                        app:cornerRadius="22dp" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/decode_video_button"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="0dp"
-                android:layout_height="44dp"
-                android:layout_weight="1"
-                android:text="解析视频"
-                android:textAllCaps="false" />
-        </LinearLayout>
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/speed_1"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:text="x1"
+                        android:textAllCaps="false"
+                        app:cornerRadius="22dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/speed_2"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:text="x2"
+                        android:textAllCaps="false"
+                        app:cornerRadius="22dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/speed_3"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_weight="1"
+                        android:text="x3"
+                        android:textAllCaps="false"
+                        app:cornerRadius="22dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
         <com.google.android.material.card.MaterialCardView
+            android:id="@+id/action_card"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="10dp"
+            app:cardBackgroundColor="?attr/colorSurfaceContainer"
+            app:cardCornerRadius="24dp"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutline"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="16dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/play_button"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:text="播放"
+                        android:textAllCaps="false"
+                        app:cornerRadius="22dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/pause_button"
+                        style="@style/Widget.Material3.Button.OutlinedButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_weight="1"
+                        android:text="暂停"
+                        android:textAllCaps="false"
+                        app:cornerRadius="22dp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="horizontal">
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/select_video_button"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_marginEnd="8dp"
+                        android:layout_weight="1"
+                        android:text="选择视频"
+                        android:textAllCaps="false"
+                        app:cornerRadius="22dp" />
+
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/decode_video_button"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="0dp"
+                        android:layout_height="44dp"
+                        android:layout_weight="1"
+                        android:text="解析视频"
+                        android:textAllCaps="false"
+                        app:cornerRadius="22dp" />
+                </LinearLayout>
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/status_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
             app:cardBackgroundColor="?attr/colorSurfaceContainerLow"
-            app:cardCornerRadius="14dp">
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            app:strokeColor="?attr/colorOutline"
+            app:strokeWidth="1dp">
 
             <TextView
                 android:id="@+id/sample_text"

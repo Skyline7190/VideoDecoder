@@ -4,19 +4,26 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import android.content.Intent;
+import android.content.res.ColorStateList;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
+import android.view.View;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.Button;
+import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import androidx.core.content.ContextCompat;
+import com.google.android.material.button.MaterialButton;
+import com.google.android.material.card.MaterialCardView;
 import java.io.IOException;
 import java.util.Locale;
 
@@ -42,9 +49,18 @@ public class MainActivity extends AppCompatActivity {
 
     private TextView currentTimeText;
     private TextView totalTimeText;
+    private TextView headerStatusChip;
+    private TextView previewStatusChip;
+    private MaterialCardView headerCard;
+    private MaterialCardView actionCard;
+    private MaterialButton decodeButton;
+    private LinearLayout speedLayout;
     private boolean isSeeking = false;
     private volatile boolean isSurfaceReady = false;
     private volatile boolean isDestroyed = false;
+    private boolean hasUiStateApplied = false;
+    private final AccelerateDecelerateInterpolator entranceInterpolator =
+            new AccelerateDecelerateInterpolator();
     private final ActivityResultLauncher<String[]> videoPickerLauncher =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), this::handlePickedVideo);
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
@@ -122,6 +138,11 @@ public class MainActivity extends AppCompatActivity {
         speed1Button = findViewById(R.id.speed_1);
         speed2Button = findViewById(R.id.speed_2);
         speed3Button = findViewById(R.id.speed_3);
+        headerStatusChip = findViewById(R.id.header_status_chip);
+        previewStatusChip = findViewById(R.id.preview_status_chip);
+        headerCard = findViewById(R.id.header_card);
+        actionCard = findViewById(R.id.action_card);
+        speedLayout = findViewById(R.id.speed_layout);
 
 
 
@@ -178,6 +199,7 @@ public class MainActivity extends AppCompatActivity {
         tv = findViewById(R.id.sample_text);
         selectVideoButton = findViewById(R.id.select_video_button);
         decodeVideoButton = findViewById(R.id.decode_video_button);
+        decodeButton = findViewById(R.id.decode_video_button);
 
         playButton = findViewById(R.id.play_button);
         pauseButton = findViewById(R.id.pause_button);
@@ -221,21 +243,26 @@ public class MainActivity extends AppCompatActivity {
             }
             if (videoUri != null) {
                 final Uri selectedUri = videoUri;
+                final boolean[] decodeFailed = {false};
                 setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PLAYING);
                 decodeThread = new Thread(() -> {
-                    runOnUiThread(() -> tv.setText("正在解析视频..."));
+                    runOnUiThread(() -> setStatusTextWithFade("正在解析视频..."));
                     try {
                         try (ParcelFileDescriptor videoFd = openVideoFileDescriptor(selectedUri)) {
                             decodeVideo("fd:" + videoFd.getFd(), null);
                         }
                     } catch (IOException e) {
+                        decodeFailed[0] = true;
                         Log.e(TAG, "Failed to open selected video file descriptor", e);
                         runOnUiThread(() -> {
-                            tv.setText("无法读取文件");
+                            setStatusTextWithFade("无法读取文件");
                             Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show();
                         });
                     } finally {
                         decodeThread = null;
+                        if (!decodeFailed[0]) {
+                            runOnUiThread(() -> setStatusTextWithFade("解析结束，可重新选择或再次解析"));
+                        }
                         if (!isSurfaceReady) {
                             setSurface(null);
                         }
@@ -253,6 +280,8 @@ public class MainActivity extends AppCompatActivity {
         });
 
         setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.IDLE);
+
+        startEntranceAnimations();
 
     }
     // 新增native方法声明
@@ -292,12 +321,12 @@ public class MainActivity extends AppCompatActivity {
             try (ParcelFileDescriptor ignored = openVideoFileDescriptor(uri)) {
                 videoUri = uri;
             }
-            tv.setText("已选择视频：" + uri);
+            setStatusTextWithFade("已选择视频：" + uri);
             updateProgress(0, 0);
             setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.READY);
         } catch (IOException e) {
             Log.e(TAG, "Failed to read selected video file", e);
-            tv.setText("无法读取文件");
+            setStatusTextWithFade("无法读取文件");
         }
 
         // 并非所有文档提供者都支持持久化授权，失败时保持播放流程可用
@@ -330,26 +359,263 @@ public class MainActivity extends AppCompatActivity {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
     }
 
+    private void startEntranceAnimations() {
+        View[] cards = {
+                findViewById(R.id.header_card),
+                findViewById(R.id.preview_card),
+                findViewById(R.id.progress_card),
+                findViewById(R.id.speed_card),
+                findViewById(R.id.action_card),
+                findViewById(R.id.status_card)
+        };
+
+        for (int i = 0; i < cards.length; i++) {
+            animateEntrance(cards[i], i * 70L, 380L, 14f);
+        }
+
+        View[] buttons = {
+                speed05Button,
+                speed1Button,
+                speed2Button,
+                speed3Button,
+                playButton,
+                pauseButton,
+                selectVideoButton,
+                decodeVideoButton
+        };
+
+        long buttonBaseDelay = cards.length * 70L;
+        for (int i = 0; i < buttons.length; i++) {
+            animateEntrance(buttons[i], buttonBaseDelay + (i * 45L), 280L, 8f);
+        }
+    }
+
+    private void animateEntrance(View view, long delayMs, long durationMs, float offsetDp) {
+        if (view == null) {
+            return;
+        }
+
+        float targetAlpha = view.getAlpha();
+        view.setAlpha(0f);
+        view.setTranslationY(dpToPx(offsetDp));
+        view.animate()
+                .alpha(targetAlpha)
+                .translationY(0f)
+                .setStartDelay(delayMs)
+                .setDuration(durationMs)
+                .setInterpolator(entranceInterpolator)
+                .start();
+    }
+
+    private float dpToPx(float dp) {
+        return dp * getResources().getDisplayMetrics().density;
+    }
+
+    private void setStatusTextWithFade(String text) {
+        if (tv == null) {
+            return;
+        }
+
+        if (text == null) {
+            text = "";
+        }
+
+        tv.animate().cancel();
+        String nextText = text;
+        tv.animate()
+                .alpha(0f)
+                .setDuration(90L)
+                .setInterpolator(entranceInterpolator)
+                .withEndAction(() -> {
+                    tv.setText(nextText);
+                    tv.animate()
+                            .alpha(1f)
+                            .setDuration(90L)
+                            .setInterpolator(entranceInterpolator)
+                            .start();
+                })
+                .start();
+    }
+
     private void setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState state) {
         playbackUiState = state;
         runOnUiThread(() -> {
             PlaybackUiPolicy.ControlState controlState = PlaybackUiPolicy.resolve(state);
+            updateUiStateColorScheme(state);
             if (decodeVideoButton != null) {
-                decodeVideoButton.setEnabled(controlState.decodeEnabled);
+                applyControlFade(decodeVideoButton, controlState.decodeEnabled, 0.45f);
                 decodeVideoButton.setText(controlState.decodeText);
             }
             if (playButton != null) {
-                playButton.setEnabled(controlState.playEnabled);
+                applyControlFade(playButton, controlState.playEnabled, 0.45f);
             }
             if (pauseButton != null) {
-                pauseButton.setEnabled(controlState.pauseEnabled);
+                applyControlFade(pauseButton, controlState.pauseEnabled, 0.45f);
             }
-            if (speed05Button != null) speed05Button.setEnabled(controlState.speedEnabled);
-            if (speed1Button != null) speed1Button.setEnabled(controlState.speedEnabled);
-            if (speed2Button != null) speed2Button.setEnabled(controlState.speedEnabled);
-            if (speed3Button != null) speed3Button.setEnabled(controlState.speedEnabled);
-            if (seekBar != null) seekBar.setEnabled(controlState.seekEnabled);
+
+            if (speed05Button != null) applyControlFade(speed05Button, controlState.speedEnabled, 0.45f);
+            if (speed1Button != null) applyControlFade(speed1Button, controlState.speedEnabled, 0.45f);
+            if (speed2Button != null) applyControlFade(speed2Button, controlState.speedEnabled, 0.45f);
+            if (speed3Button != null) applyControlFade(speed3Button, controlState.speedEnabled, 0.45f);
+            if (seekBar != null) applyControlFade(seekBar, controlState.seekEnabled, 0.45f);
+
+            View progressCard = findViewById(R.id.progress_card);
+            View speedCard = findViewById(R.id.speed_card);
+            applyViewFade(progressCard, controlState.seekEnabled ? 1f : 0.62f);
+            applyViewFade(speedCard, controlState.speedEnabled ? 1f : 0.62f);
+
+            hasUiStateApplied = true;
         });
+    }
+
+    private void updateUiStateColorScheme(PlaybackUiPolicy.PlaybackUiState state) {
+        StateColorScheme scheme = resolveStateColorScheme(state);
+
+        if (headerStatusChip != null) {
+            headerStatusChip.setText(scheme.label);
+            headerStatusChip.setBackgroundTintList(ColorStateList.valueOf(resolveColor(scheme.chipBackgroundColorRes)));
+            headerStatusChip.setTextColor(resolveColor(scheme.chipTextColorRes));
+        }
+
+        if (previewStatusChip != null) {
+            previewStatusChip.setText(scheme.label);
+            previewStatusChip.setBackgroundTintList(ColorStateList.valueOf(resolveColor(scheme.chipBackgroundColorRes)));
+            previewStatusChip.setTextColor(resolveColor(scheme.chipTextColorRes));
+        }
+
+        if (headerCard != null) {
+            headerCard.setCardBackgroundColor(resolveColor(scheme.cardBackgroundColorRes));
+        }
+
+        if (actionCard != null) {
+            actionCard.setCardBackgroundColor(resolveColor(scheme.cardBackgroundColorRes));
+        }
+
+        if (decodeButton != null) {
+            applyButtonTint(decodeButton, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
+        }
+
+        applyButtonTint(playButton, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
+        applyButtonTint(pauseButton, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
+        applyButtonTint(selectVideoButton, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
+        applyButtonTint(speed05Button, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
+        applyButtonTint(speed1Button, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
+        applyButtonTint(speed2Button, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
+        applyButtonTint(speed3Button, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
+
+        if (speedLayout != null) {
+            int accent = resolveColor(scheme.buttonBackgroundColorRes);
+            if (seekBar != null) {
+                seekBar.setProgressTintList(ColorStateList.valueOf(accent));
+                seekBar.setThumbTintList(ColorStateList.valueOf(accent));
+            }
+        }
+    }
+
+    private StateColorScheme resolveStateColorScheme(PlaybackUiPolicy.PlaybackUiState state) {
+        switch (state) {
+            case PLAYING:
+                return new StateColorScheme(
+                        "UNDERGO",
+                        R.color.state_undergo_chip_bg,
+                        R.color.state_undergo_chip_text,
+                        R.color.state_undergo_card_bg,
+                        R.color.state_undergo_button_bg,
+                        R.color.state_undergo_button_text
+                );
+            case PAUSED:
+                return new StateColorScheme(
+                        "NEAR",
+                        R.color.state_near_chip_bg,
+                        R.color.state_near_chip_text,
+                        R.color.state_near_card_bg,
+                        R.color.state_near_button_bg,
+                        R.color.state_near_button_text
+                );
+            case IDLE:
+                return new StateColorScheme(
+                        "PASSED",
+                        R.color.state_passed_chip_bg,
+                        R.color.state_passed_chip_text,
+                        R.color.state_passed_card_bg,
+                        R.color.state_passed_button_bg,
+                        R.color.state_passed_button_text
+                );
+            case READY:
+            default:
+                return new StateColorScheme(
+                        "COMPLETED",
+                        R.color.state_completed_chip_bg,
+                        R.color.state_completed_chip_text,
+                        R.color.state_completed_card_bg,
+                        R.color.state_completed_button_bg,
+                        R.color.state_completed_button_text
+                );
+        }
+    }
+
+    private int resolveColor(int colorResId) {
+        return ContextCompat.getColor(this, colorResId);
+    }
+
+    private void applyButtonTint(Button button, int backgroundColorRes, int textColorRes) {
+        if (button == null) {
+            return;
+        }
+
+        button.setBackgroundTintList(ColorStateList.valueOf(resolveColor(backgroundColorRes)));
+        button.setTextColor(resolveColor(textColorRes));
+    }
+
+    private static final class StateColorScheme {
+        final String label;
+        final int chipBackgroundColorRes;
+        final int chipTextColorRes;
+        final int cardBackgroundColorRes;
+        final int buttonBackgroundColorRes;
+        final int buttonTextColorRes;
+
+        StateColorScheme(
+                String label,
+                int chipBackgroundColorRes,
+                int chipTextColorRes,
+                int cardBackgroundColorRes,
+                int buttonBackgroundColorRes,
+                int buttonTextColorRes
+        ) {
+            this.label = label;
+            this.chipBackgroundColorRes = chipBackgroundColorRes;
+            this.chipTextColorRes = chipTextColorRes;
+            this.cardBackgroundColorRes = cardBackgroundColorRes;
+            this.buttonBackgroundColorRes = buttonBackgroundColorRes;
+            this.buttonTextColorRes = buttonTextColorRes;
+        }
+    }
+
+    private void applyControlFade(View view, boolean enabled, float disabledAlpha) {
+        if (view == null) {
+            return;
+        }
+
+        view.setEnabled(enabled);
+        applyViewFade(view, enabled ? 1f : disabledAlpha);
+    }
+
+    private void applyViewFade(View view, float targetAlpha) {
+        if (view == null) {
+            return;
+        }
+
+        if (!hasUiStateApplied) {
+            view.setAlpha(targetAlpha);
+            return;
+        }
+
+        view.animate()
+                .alpha(targetAlpha)
+                .setDuration(180L)
+                .setInterpolator(entranceInterpolator)
+                .start();
     }
 
     /* ----------------- 回调方法 ----------------- */

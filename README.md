@@ -11,6 +11,7 @@ VideoDecoder 是一个基于 **Android + JNI + FFmpeg + OpenGL ES + AAudio** 的
 - 播放、暂停、恢复、Seek、倍速播放
 - 倍速播放使用 FFmpeg `atempo`，实现变速不变调
 - 通过进度条轮询 native 播放进度
+- Material 3 卡片化 UI（24dp 圆角、语义化状态色、轻量动效）
 - 可选导出 `output.yuv`，便于调试解码与渲染链路；默认播放不写 YUV 文件，减少 I/O 和存储压力
 
 ## 技术架构
@@ -254,6 +255,34 @@ flowchart TB
 .\gradlew.bat testDebugUnitTest
 ```
 
+## UI 设计与交互（基于 `DESIGN.md`）
+
+当前首页 UI 已按 Deadliner 风格语言完成一轮改造，重点如下：
+
+- **卡片语言**：主要信息区统一为 24dp 圆角卡片，使用 `surfaceContainer*` 分层而不是重阴影。
+- **状态语义色**：引入四态色并做浅色/深色资源分离，避免在布局中硬编码颜色。
+- **状态联动**：`MainActivity` 会根据播放状态映射并联动更新 chip、卡片底色、解码按钮、播放/暂停/倍速/选择视频按钮，以及 SeekBar 强调色。
+- **动效节奏**：页面首屏采用 staggered `fade + slight slide` 入场；状态切换使用 180ms fade；状态文案（如“已选择视频”“正在解析视频”“解析结束”）采用统一 fade + text swap。
+
+### 状态映射
+
+- `PLAYING -> UNDERGO`
+- `PAUSED -> NEAR`
+- `IDLE -> PASSED`
+- `READY -> COMPLETED`
+
+### 状态色资源
+
+- 日间：`app/src/main/res/values/colors.xml`
+- 夜间：`app/src/main/res/values-night/colors.xml`
+
+已定义四组 token（每组含 chip、card、button 前景/背景）：
+
+- `state_undergo_*`
+- `state_near_*`
+- `state_passed_*`
+- `state_completed_*`
+
 ## 构建要求
 
 - Android Studio
@@ -298,6 +327,13 @@ app/
 │  ├─ PlaybackTimeFormatter.java
 │  └─ PlaybackUiPolicy.java
 ├─ src/main/res/layout/activity_main.xml
+├─ src/main/res/drawable/
+│  ├─ bg_deadliner_surface.xml
+│  └─ bg_deadliner_chip.xml
+├─ src/main/res/values/colors.xml
+├─ src/main/res/values/themes.xml
+├─ src/main/res/values-night/colors.xml
+├─ src/main/res/values-night/themes.xml
 ├─ src/main/cpp/
 │  ├─ native-lib.cpp
 │  ├─ MediaInput.cpp/.h

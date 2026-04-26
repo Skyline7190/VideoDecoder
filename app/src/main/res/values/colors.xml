@@ -8,14 +8,42 @@
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
 
-    <!-- MD3-like seed palette -->
-    <color name="md_theme_light_primary">#6750A4</color>
+    <!-- Calm Deadliner-style palette -->
+    <color name="md_theme_light_primary">#2F6DA2</color>
     <color name="md_theme_light_onPrimary">#FFFFFF</color>
-    <color name="md_theme_light_secondary">#625B71</color>
+    <color name="md_theme_light_secondary">#4E6478</color>
     <color name="md_theme_light_onSecondary">#FFFFFF</color>
+    <color name="md_theme_light_tertiary">#7A5A3A</color>
+    <color name="md_theme_light_onTertiary">#FFFFFF</color>
 
-    <color name="md_theme_dark_primary">#D0BCFF</color>
-    <color name="md_theme_dark_onPrimary">#381E72</color>
-    <color name="md_theme_dark_secondary">#CCC2DC</color>
-    <color name="md_theme_dark_onSecondary">#332D41</color>
+    <color name="md_theme_dark_primary">#A0CAFF</color>
+    <color name="md_theme_dark_onPrimary">#003257</color>
+    <color name="md_theme_dark_secondary">#B7CAE1</color>
+    <color name="md_theme_dark_onSecondary">#203545</color>
+    <color name="md_theme_dark_tertiary">#ECC08F</color>
+    <color name="md_theme_dark_onTertiary">#462A0E</color>
+
+    <color name="state_undergo_chip_bg">#8CD1E4FF</color>
+    <color name="state_undergo_chip_text">#0F3A61</color>
+    <color name="state_undergo_card_bg">#DCEBFA</color>
+    <color name="state_undergo_button_bg">#2F6DA2</color>
+    <color name="state_undergo_button_text">#FFFFFF</color>
+
+    <color name="state_near_chip_bg">#99FFD8B0</color>
+    <color name="state_near_chip_text">#724011</color>
+    <color name="state_near_card_bg">#F8E7D7</color>
+    <color name="state_near_button_bg">#A5622F</color>
+    <color name="state_near_button_text">#FFFFFF</color>
+
+    <color name="state_passed_chip_bg">#99F5B7B7</color>
+    <color name="state_passed_chip_text">#7B2424</color>
+    <color name="state_passed_card_bg">#F4DDDD</color>
+    <color name="state_passed_button_bg">#A24A4A</color>
+    <color name="state_passed_button_text">#FFFFFF</color>
+
+    <color name="state_completed_chip_bg">#9926C3A5</color>
+    <color name="state_completed_chip_text">#0D4A3E</color>
+    <color name="state_completed_card_bg">#DAEEE9</color>
+    <color name="state_completed_button_bg">#2A8B77</color>
+    <color name="state_completed_button_text">#FFFFFF</color>
 </resources>

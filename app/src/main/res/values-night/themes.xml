@@ -2,8 +2,21 @@
     <style name="Theme.VideoDecoder" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">@color/md_theme_dark_primary</item>
         <item name="colorOnPrimary">@color/md_theme_dark_onPrimary</item>
+        <item name="colorPrimaryContainer">#1E344A</item>
+        <item name="colorOnPrimaryContainer">#D2E4FF</item>
         <item name="colorSecondary">@color/md_theme_dark_secondary</item>
         <item name="colorOnSecondary">@color/md_theme_dark_onSecondary</item>
+        <item name="colorTertiary">@color/md_theme_dark_tertiary</item>
+        <item name="colorOnTertiary">@color/md_theme_dark_onTertiary</item>
+        <item name="colorSurface">#101417</item>
+        <item name="colorOnSurface">#E3E8ED</item>
+        <item name="colorSurfaceVariant">#3F474E</item>
+        <item name="colorOnSurfaceVariant">#BFC8D2</item>
+        <item name="colorSurfaceContainerLow">#151B20</item>
+        <item name="colorSurfaceContainer">#1A2128</item>
+        <item name="colorSurfaceContainerHigh">#212A33</item>
+        <item name="colorOutline">#8A96A2</item>
+        <item name="colorOutlineVariant">#3E4852</item>
         <item name="android:statusBarColor">?attr/colorSurface</item>
         <item name="android:navigationBarColor">?attr/colorSurface</item>
     </style>
