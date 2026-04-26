@@ -35,7 +35,7 @@ flowchart TB
     subgraph Native["Native 媒体内核"]
         Session["PlaybackSession"]
         State["PlaybackState"]
-        Window["NativeWindowPtr"]
+        Window["NativeWindowHolder"]
         Demuxer["Demuxer"]
         VideoDecoder["Video Decoder"]
         AudioDecoder["Audio Decoder"]
@@ -82,6 +82,7 @@ flowchart TB
 - `PlaybackState.h`：播放控制、Seek、时钟、进度和倍速等单次播放状态
 - `MediaInput.cpp/.h`：普通路径和 `fd:` 输入封装，管理自定义 AVIO、fd 复制和输入资源释放
 - `NativeEgl.cpp/.h`：EGL display、window surface、context 初始化与清理
+- `NativeWindowHolder.cpp/.h`：Surface 到 `ANativeWindow` 的转换、引用快照和释放
 - `Demuxer.cpp/.h`：读取 `AVPacket`，分发到音频/视频队列，处理底层 seek
 - `Decoder.cpp/.h`：视频解码，将源帧转换为紧密 `YUV420P` 后送入渲染队列，并在调试导出开启时写入 YUV 文件
 - `AudioRender.cpp/.h`：AAudio 输出、内部 PCM 队列、缓冲延迟估算
@@ -212,8 +213,8 @@ flowchart TB
     State --> DemuxerState["Demuxer / Decoder / PacketQueue 显式读取状态"]
     State --> JniState["JNI 控制接口读写当前会话状态"]
 
-    SurfaceCall["setSurface 调用"] --> WindowLock["g_nativeWindowMutex"]
-    WindowLock --> SharedWindow["NativeWindowPtr(shared_ptr + ANativeWindow_release)"]
+    SurfaceCall["setSurface 调用"] --> WindowHolder["NativeWindowHolder"]
+    WindowHolder --> SharedWindow["shared_ptr<ANativeWindow>"]
     SharedWindow --> RenderSnapshot["Render 线程复制窗口快照"]
     RenderSnapshot --> NativeEgl["NativeEgl"]
     NativeEgl --> EGLSurface["EGLSurface / EGLContext"]
@@ -237,6 +238,7 @@ flowchart TB
 - 视频输入不再完整复制到 cache；Java 层通过 `ParcelFileDescriptor` 打开 SAF Uri，并把 `fd:<number>` 交给 native 自定义 AVIO，避免大视频启动前的整文件复制成本。
 - Native 播放队列和 `AudioRenderer` 已收敛进 `PlaybackSession`，移除了全局 `g_audioRenderer` 和 `g_sessionActive`，降低跨会话裸指针和释放顺序风险。
 - `ANativeWindow` 已改为带释放器的共享句柄，Render 线程使用窗口快照，避免 Surface 生命周期变化时继续读写悬空全局指针。
+- Surface 到 `ANativeWindow` 的转换、锁保护、引用快照和释放已抽到 `NativeWindowHolder`，`native-lib.cpp` 不再直接维护 window 全局锁和 deleter。
 - 播放控制、Seek、时钟、进度和倍速状态已收敛进 `PlaybackState`，`Demuxer`、`Decoder`、`PacketQueue`、`AudioRenderer` 不再通过 `extern` 读取全局播放状态。
 - `decodeVideo()` 的 JNI 字符串、AVIO/fd、codec context 和 YUV 文件清理改为 `ScopeExit` 管理，减少初始化失败或早退分支漏释放资源的风险。
 - 清理未使用的单队列 `Demuxer::demux()` 重载和 `Decoder` 内部冗余 `FrameQueue` 成员，缩小 native 模块维护面。
@@ -298,6 +300,7 @@ app/
 │  ├─ native-lib.cpp
 │  ├─ MediaInput.cpp/.h
 │  ├─ NativeEgl.cpp/.h
+│  ├─ NativeWindowHolder.cpp/.h
 │  ├─ Demuxer.cpp/.h
 │  ├─ Decoder.cpp/.h
 │  ├─ queue.cpp/.h

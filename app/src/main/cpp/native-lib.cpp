@@ -14,6 +14,7 @@
 #include "PlaybackState.h"
 #include "MediaInput.h"
 #include "NativeEgl.h"
+#include "NativeWindowHolder.h"
 #include "Demuxer.h"
 #include "Decoder.h"
 #include "queue.h"
@@ -23,8 +24,6 @@
 #include <atomic>
 //渲染相关头文件
 #include <GLES3/gl3.h>
-#include <android/native_window.h>
-#include <android/native_window_jni.h> //用于ANativeWindow_fromSurface
 //日志宏定义
 #define LOG_TAG "NativeLib"
 
@@ -42,16 +41,6 @@ extern "C" {
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 /* ========================== 全局变量声明 ========================== */
-struct NativeWindowDeleter {
-    void operator()(ANativeWindow* window) const {
-        if (window) {
-            ANativeWindow_release(window);
-        }
-    }
-};
-
-using NativeWindowPtr = std::shared_ptr<ANativeWindow>;
-
 class ScopeExit {
 public:
     explicit ScopeExit(std::function<void()> cleanup) : cleanup_(std::move(cleanup)) {}
@@ -69,9 +58,7 @@ private:
     bool active_ = true;
 };
 
-// 全局变量，用于保存 Java 层传入的 Surface 对应的 NativeWindow
-NativeWindowPtr g_nativeWindow;
-std::mutex g_nativeWindowMutex;
+NativeWindowHolder g_nativeWindowHolder;
 std::shared_ptr<PlaybackState> g_currentPlaybackState;
 std::mutex g_playbackStateMutex;
 constexpr float kPlaybackSpeedDefault = 1.0f;
@@ -114,17 +101,7 @@ inline float sanitizePlaybackSpeed(float speed) {
 extern "C" {
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_setSurface(JNIEnv* env, jobject thiz, jobject surface) {
-    std::lock_guard<std::mutex> lock(g_nativeWindowMutex);
-    g_nativeWindow.reset();
-    if (surface == nullptr) {
-        return;
-    }
-    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
-    if (!window) {
-        LOGE("Failed to create NativeWindow from Surface");
-        return;
-    }
-    g_nativeWindow = NativeWindowPtr(window, NativeWindowDeleter());
+    g_nativeWindowHolder.setSurface(env, surface);
 }
 //视频解码主函数
 JNIEXPORT void JNICALL
@@ -573,11 +550,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         };
 
         // 1. 检查NativeWindow有效性
-        NativeWindowPtr renderWindow;
-        {
-            std::lock_guard<std::mutex> lock(g_nativeWindowMutex);
-            renderWindow = g_nativeWindow;
-        }
+        auto renderWindow = g_nativeWindowHolder.snapshot();
 
         if (!renderWindow) {
             abortRender("RenderThread: NativeWindow is not valid");
