@@ -7,14 +7,12 @@
 #include <cmath>
 #include <inttypes.h>
 #include <cstring>
-#include <cerrno>
-#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <functional>
 #include <utility>
-#include <unistd.h>
 #include "PlaybackState.h"
+#include "MediaInput.h"
 #include "Demuxer.h"
 #include "Decoder.h"
 #include "queue.h"
@@ -111,61 +109,6 @@ inline float sanitizePlaybackSpeed(float speed) {
     if (speed < kPlaybackSpeedMin) return kPlaybackSpeedMin;
     if (speed > kPlaybackSpeedMax) return kPlaybackSpeedMax;
     return speed;
-}
-
-struct FdAvioSource {
-    int fd = -1;
-};
-
-int readFdPacket(void* opaque, uint8_t* buffer, int bufferSize) {
-    auto* source = static_cast<FdAvioSource*>(opaque);
-    if (!source || source->fd < 0) {
-        return AVERROR(EINVAL);
-    }
-    ssize_t bytesRead = read(source->fd, buffer, static_cast<size_t>(bufferSize));
-    if (bytesRead == 0) {
-        return AVERROR_EOF;
-    }
-    if (bytesRead < 0) {
-        return AVERROR(errno);
-    }
-    return static_cast<int>(bytesRead);
-}
-
-int64_t seekFdPacket(void* opaque, int64_t offset, int whence) {
-    auto* source = static_cast<FdAvioSource*>(opaque);
-    if (!source || source->fd < 0) {
-        return AVERROR(EINVAL);
-    }
-    if (whence == AVSEEK_SIZE) {
-        off_t current = lseek(source->fd, 0, SEEK_CUR);
-        if (current < 0) {
-            return AVERROR(errno);
-        }
-        off_t size = lseek(source->fd, 0, SEEK_END);
-        if (size < 0) {
-            return AVERROR(errno);
-        }
-        if (lseek(source->fd, current, SEEK_SET) < 0) {
-            return AVERROR(errno);
-        }
-        return static_cast<int64_t>(size);
-    }
-
-    int origin = SEEK_SET;
-    if (whence == SEEK_CUR) {
-        origin = SEEK_CUR;
-    } else if (whence == SEEK_END) {
-        origin = SEEK_END;
-    } else if (whence != SEEK_SET) {
-        return AVERROR(EINVAL);
-    }
-
-    off_t position = lseek(source->fd, static_cast<off_t>(offset), origin);
-    if (position < 0) {
-        return AVERROR(errno);
-    }
-    return static_cast<int64_t>(position);
 }
 
 /* ========================== EGL 相关函数 ========================== */
@@ -328,83 +271,12 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     LOGD("开始解析视频: %s", path);
 
     // 1. 打开输入文件
-    AVFormatContext *fmt_ctx = nullptr;
-    AVIOContext* avio_ctx = nullptr;
-    uint8_t* avioBuffer = nullptr;
-    FdAvioSource* fdSource = nullptr;
-    int duplicatedFd = -1;
-
-    auto closeInput = [&]() {
-        if (fmt_ctx) {
-            avformat_close_input(&fmt_ctx);
-        }
-        if (avio_ctx) {
-            av_freep(&avio_ctx->buffer);
-            avio_context_free(&avio_ctx);
-        } else if (avioBuffer) {
-            av_freep(&avioBuffer);
-        }
-        if (duplicatedFd >= 0) {
-            close(duplicatedFd);
-            duplicatedFd = -1;
-        }
-        delete fdSource;
-        fdSource = nullptr;
-    };
-    ScopeExit inputCleanup(closeInput);
-
-    int openInputRet = 0;
-    if (strncmp(path, "fd:", 3) == 0) {
-        char* end = nullptr;
-        long javaFd = strtol(path + 3, &end, 10);
-        if (!end || *end != '\0' || javaFd < 0) {
-            openInputRet = AVERROR(EINVAL);
-        } else {
-            duplicatedFd = dup(static_cast<int>(javaFd));
-            if (duplicatedFd < 0) {
-                openInputRet = AVERROR(errno);
-            } else {
-                if (lseek(duplicatedFd, 0, SEEK_SET) < 0) {
-                    LOGD("Input fd is not seekable at start: %d", errno);
-                }
-                fdSource = new FdAvioSource();
-                fdSource->fd = duplicatedFd;
-                constexpr int avioBufferSize = 64 * 1024;
-                avioBuffer = static_cast<uint8_t*>(av_malloc(avioBufferSize));
-                if (!avioBuffer) {
-                    openInputRet = AVERROR(ENOMEM);
-                } else {
-                    avio_ctx = avio_alloc_context(avioBuffer,
-                                                  avioBufferSize,
-                                                  0,
-                                                  fdSource,
-                                                  readFdPacket,
-                                                  nullptr,
-                                                  seekFdPacket);
-                    if (!avio_ctx) {
-                        openInputRet = AVERROR(ENOMEM);
-                    } else {
-                        avioBuffer = nullptr;
-                        fmt_ctx = avformat_alloc_context();
-                        if (!fmt_ctx) {
-                            openInputRet = AVERROR(ENOMEM);
-                        } else {
-                            fmt_ctx->pb = avio_ctx;
-                            fmt_ctx->flags |= AVFMT_FLAG_CUSTOM_IO;
-                            openInputRet = avformat_open_input(&fmt_ctx, nullptr, nullptr, nullptr);
-                        }
-                    }
-                }
-            }
-        }
-    } else {
-        openInputRet = avformat_open_input(&fmt_ctx, path, nullptr, nullptr);
-    }
-
-    if (openInputRet != 0) {
+    MediaInput input;
+    if (input.open(path) != 0) {
         __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Could not open input file: %s", path);
         return;
     }
+    AVFormatContext *fmt_ctx = input.context();
 
     // 2. 找到视频流和音频流
     int video_stream_index = av_find_best_stream(fmt_ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
