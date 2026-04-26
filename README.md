@@ -17,20 +17,61 @@ VideoDecoder 是一个基于 **Android + JNI + FFmpeg + OpenGL ES + AAudio** 的
 
 项目采用 **Java UI 层 + Native 媒体内核** 的结构。Java 负责界面、文件选择和用户交互；C++ 负责媒体处理、线程编排、同步和渲染。
 
-```text
-Java UI
-  MainActivity
-  SurfaceView / controls / progress polling
-        |
-        | JNI
-        v
-Native Orchestration
-  native-lib.cpp
-  PlaybackSession / clocks / thread lifecycle
-        |
-        +--> Demux thread  -> video PacketQueue -> Video Decode thread -> FrameQueue -> Render thread
-        |
-        +--> audio PacketQueue -> Audio Decode thread -> Swr + atempo -> AudioRenderer(AAudio)
+```mermaid
+flowchart TB
+    subgraph Java["Java UI 层"]
+        Activity["MainActivity"]
+        SurfaceView["SurfaceView"]
+        Controls["播放 / 暂停 / Seek / 倍速 / 进度"]
+        PFD["ParcelFileDescriptor"]
+    end
+
+    subgraph JNI["JNI 边界"]
+        DecodeApi["decodeVideo(videoPath, outputPath)"]
+        SurfaceApi["setSurface(surface)"]
+        ControlApi["pause / resume / seek / speed / release"]
+    end
+
+    subgraph Native["Native 媒体内核"]
+        Session["PlaybackSession"]
+        Clocks["原子播放状态与时钟"]
+        Window["NativeWindowPtr"]
+        Demuxer["Demuxer"]
+        VideoDecoder["Video Decoder"]
+        AudioDecoder["Audio Decoder"]
+        Renderer["OpenGL ES Renderer"]
+        AudioRenderer["AudioRenderer (AAudio)"]
+    end
+
+    subgraph FFmpeg["FFmpeg"]
+        Avio["Custom AVIO(fd)"]
+        Format["AVFormatContext"]
+        Codec["AVCodecContext"]
+        Sws["sws_scale"]
+        Swr["SwrConvert"]
+        Atempo["atempo filter"]
+    end
+
+    Activity --> DecodeApi
+    SurfaceView --> SurfaceApi
+    Controls --> ControlApi
+    PFD --> DecodeApi
+
+    DecodeApi --> Session
+    SurfaceApi --> Window
+    ControlApi --> Clocks
+
+    Session --> Demuxer
+    Session --> VideoDecoder
+    Session --> AudioDecoder
+    Session --> Renderer
+    Session --> AudioRenderer
+
+    Demuxer --> Avio --> Format
+    VideoDecoder --> Codec --> Sws
+    AudioDecoder --> Codec --> Swr --> Atempo
+    Renderer --> Window
+    AudioRenderer --> Clocks
 ```
 
 ### 主要模块
@@ -52,6 +93,38 @@ Native Orchestration
 3. Audio Decode 线程：从音频队列取包解码，使用 `Swr` 转为 S16，再按播放速度进入 `atempo` 滤镜链，最后写入 AAudio 队列。
 4. Render 线程：从 `FrameQueue` 取视频帧，根据音频时钟节奏控制渲染并执行 `eglSwapBuffers`。
 
+```mermaid
+flowchart LR
+    Input["SAF Uri / fd"] --> DemuxThread["Demux 线程"]
+
+    subgraph Session["PlaybackSession"]
+        VideoPackets["video PacketQueue"]
+        AudioPackets["audio PacketQueue"]
+        Frames["FrameQueue"]
+        AudioOut["AudioRenderer"]
+    end
+
+    DemuxThread --> VideoPackets
+    DemuxThread --> AudioPackets
+
+    VideoPackets --> VideoThread["Video Decode 线程"]
+    VideoThread --> Convert["转换为紧密 YUV420P"]
+    Convert --> Frames
+    Convert -. "调试开关开启时" .-> YuvFile["output.yuv"]
+
+    AudioPackets --> AudioThread["Audio Decode 线程"]
+    AudioThread --> Resample["S16 重采样"]
+    Resample --> Tempo["倍速 atempo"]
+    Tempo --> AudioOut
+
+    Frames --> RenderThread["Render 线程"]
+    RenderThread --> Sync["根据音频时钟等待"]
+    Sync --> GLES["YUV 纹理上传 + shader"]
+    GLES --> Surface["SurfaceView"]
+
+    AudioOut --> Speaker["设备音频输出"]
+```
+
 `PacketQueue` 和 `FrameQueue` 都带背压控制，避免 demux 或 decode 过快造成内存无限增长。Seek 或停止时会清空队列并唤醒等待线程，保证线程可以退出或恢复。
 
 ## 音画同步
@@ -61,6 +134,27 @@ Native Orchestration
 ```cpp
 exact_audio_pts = g_audioClock - pending_audio_duration
 diff = video_pts - exact_audio_pts
+```
+
+```mermaid
+sequenceDiagram
+    participant A as Audio Decode
+    participant R as AudioRenderer
+    participant V as Render Thread
+    participant C as Clocks
+
+    A->>R: writeData(pcm, samples)
+    A->>C: 更新 g_audioClock
+    V->>C: 读取 g_videoClock
+    V->>R: getPendingAudioDurationUs()
+    R-->>V: 尚未播放的音频延迟
+    V->>V: exact_audio_pts = g_audioClock - pending_delay
+    V->>V: diff = video_pts - exact_audio_pts
+    alt 视频快于音频
+        V->>V: 按倍速缩放 sleep
+    else 视频不快于音频
+        V->>V: 立即渲染追赶
+    end
 ```
 
 - `diff > 0`：视频快于音频，Render 线程短暂 sleep 等待。
@@ -78,7 +172,46 @@ Seek 使用两阶段握手机制：
 4. Demux 设置 `g_seekApplied=true`。
 5. Audio/Video 链路清空旧队列、flush 解码器、重置时钟后恢复播放。
 
+```mermaid
+stateDiagram-v2
+    [*] --> Playing
+    Playing --> Seeking: seekToPosition(ms)
+    Seeking --> DemuxSeek: Demuxer 执行 seek
+    DemuxSeek --> FlushQueues: 清空 PacketQueue / FrameQueue
+    FlushQueues --> FlushDecoders: avcodec_flush_buffers
+    FlushDecoders --> ResetClocks: 重置音视频时钟
+    ResetClocks --> Playing
+
+    Playing --> Paused: pauseDecoding()
+    Paused --> Playing: resumeDecoding()
+
+    Playing --> Stopping: nativeReleaseAudio() / Surface 销毁
+    Paused --> Stopping: nativeReleaseAudio() / Surface 销毁
+    Seeking --> Stopping: 停止请求
+    Stopping --> JoinThreads: 唤醒队列并终止 FrameQueue
+    JoinThreads --> ReleaseSession: join 后释放 AudioRenderer / EGL / AVIO
+    ReleaseSession --> [*]
+```
+
 暂停/恢复通过原子状态控制，避免 UI 线程等待 native 阻塞操作。AAudio callback 在暂停时输出静音。
+
+## Native 资源所有权
+
+```mermaid
+flowchart TB
+    DecodeCall["decodeVideo 调用"] --> LocalSession["栈上 PlaybackSession"]
+    LocalSession --> Queues["PacketQueue / FrameQueue"]
+    LocalSession --> AudioPtr["unique_ptr<AudioRenderer>"]
+
+    SurfaceCall["setSurface 调用"] --> WindowLock["g_nativeWindowMutex"]
+    WindowLock --> SharedWindow["NativeWindowPtr(shared_ptr + ANativeWindow_release)"]
+    SharedWindow --> RenderSnapshot["Render 线程复制窗口快照"]
+    RenderSnapshot --> EGLSurface["EGLSurface"]
+
+    Stop["停止请求"] --> Wake["notifyAll / FrameQueue terminate"]
+    Wake --> Join["join demux / decode / audio / render"]
+    Join --> Cleanup["释放 session、EGL、AVCodec、AVIO"]
+```
 
 ## 最近稳定性优化
 
