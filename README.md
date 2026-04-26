@@ -26,7 +26,7 @@ Java UI
         v
 Native Orchestration
   native-lib.cpp
-  global playback state / clocks / thread lifecycle
+  PlaybackSession / clocks / thread lifecycle
         |
         +--> Demux thread  -> video PacketQueue -> Video Decode thread -> FrameQueue -> Render thread
         |
@@ -36,7 +36,7 @@ Native Orchestration
 ### 主要模块
 
 - `MainActivity.java`：文件选择、Surface 生命周期、播放控制、进度显示
-- `native-lib.cpp`：JNI 入口、线程创建与收束、全局播放状态、音画同步
+- `native-lib.cpp`：JNI 入口、`PlaybackSession` 会话上下文、线程创建与收束、音画同步
 - `Demuxer.cpp/.h`：读取 `AVPacket`，分发到音频/视频队列，处理底层 seek
 - `Decoder.cpp/.h`：视频解码，将源帧转换为紧密 `YUV420P` 后送入渲染队列，并在调试导出开启时写入 YUV 文件
 - `AudioRender.cpp/.h`：AAudio 输出、内部 PCM 队列、缓冲延迟估算
@@ -92,6 +92,8 @@ Seek 使用两阶段握手机制：
 - YUV 调试导出改为按需启用，默认播放路径不再持续写 `output.yuv`，降低长视频播放时的 I/O 和存储压力。
 - `SurfaceView` 销毁时会请求 native 会话停止，并在播放线程结束后释放 native window，避免旧 Surface 被继续使用。
 - 视频输入不再完整复制到 cache；Java 层通过 `ParcelFileDescriptor` 打开 SAF Uri，并把 `fd:<number>` 交给 native 自定义 AVIO，避免大视频启动前的整文件复制成本。
+- Native 播放队列和 `AudioRenderer` 已收敛进 `PlaybackSession`，移除了全局 `g_audioRenderer` 和 `g_sessionActive`，降低跨会话裸指针和释放顺序风险。
+- `ANativeWindow` 已改为带释放器的共享句柄，Render 线程使用窗口快照，避免 Surface 生命周期变化时继续读写悬空全局指针。
 
 已验证：
 
@@ -172,4 +174,4 @@ app/
 - 视频输入当前通过 native 自定义 AVIO 直接读取已授权 fd。少数内容提供方如果返回不可 seek 的 fd，Seek 能力可能受限。
 - YUV 导出当前保留为 native 调试能力，默认 UI 播放路径关闭；后续可补一个显式调试开关。
 - 当前主要验证方式是构建、单元测试和 arm64 设备手动播放；native 同步链路仍需要更多端到端场景测试。
-- 释放路径仍以全局状态为主，后续可以进一步收敛为会话对象，减少全局裸指针和跨线程共享状态。
+- native 侧仍保留播放控制、时钟、seek 等少量全局原子状态；后续可继续向完整 `PlaybackSession` 状态机演进，进一步减少跨线程共享面。

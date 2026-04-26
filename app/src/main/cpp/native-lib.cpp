@@ -9,6 +9,8 @@
 #include <cstring>
 #include <cerrno>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
 #include <unistd.h>
 #include "Demuxer.h"
 #include "Decoder.h"
@@ -44,15 +46,24 @@ extern "C" {
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 /* ========================== 全局变量声明 ========================== */
+struct NativeWindowDeleter {
+    void operator()(ANativeWindow* window) const {
+        if (window) {
+            ANativeWindow_release(window);
+        }
+    }
+};
+
+using NativeWindowPtr = std::shared_ptr<ANativeWindow>;
+
 // 全局变量，用于保存 Java 层传入的 Surface 对应的 NativeWindow
-ANativeWindow* g_nativeWindow = nullptr;
+NativeWindowPtr g_nativeWindow;
+std::mutex g_nativeWindowMutex;
 std::atomic<bool> g_decodingFinished{false};// 解码完成标志
 
 // 全局暂停控制变量
 //音频相关变量
-AudioRenderer* g_audioRenderer = nullptr;
 std::atomic<bool> g_audioDecodingFinished{false};
-std::atomic<bool> g_sessionActive{false};
 // 全局变量添加
 std::atomic<int64_t> g_audioClock{0};
 std::atomic<int64_t> g_videoClock{0};
@@ -64,6 +75,13 @@ std::atomic<float> g_playbackSpeed{1.0f};
 constexpr float kPlaybackSpeedDefault = 1.0f;
 constexpr float kPlaybackSpeedMin = 0.5f;
 constexpr float kPlaybackSpeedMax = 3.0f;
+
+struct PlaybackSession {
+    PacketQueue videoPacketQueue;
+    PacketQueue audioPacketQueue;
+    FrameQueue frameQueue;
+    std::unique_ptr<AudioRenderer> audioRenderer;
+};
 
 inline float sanitizePlaybackSpeed(float speed) {
     if (!std::isfinite(speed)) return kPlaybackSpeedDefault;
@@ -240,14 +258,17 @@ void cleanupEGL(EGLDisplay display, EGLSurface surface, EGLContext context) {
 // 设置Surface接口
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_setSurface(JNIEnv* env, jobject thiz, jobject surface) {
-    if (g_nativeWindow) {
-        ANativeWindow_release(g_nativeWindow);
-        g_nativeWindow = nullptr;
-    }
+    std::lock_guard<std::mutex> lock(g_nativeWindowMutex);
+    g_nativeWindow.reset();
     if (surface == nullptr) {
         return;
     }
-    g_nativeWindow = ANativeWindow_fromSurface(env, surface);
+    ANativeWindow* window = ANativeWindow_fromSurface(env, surface);
+    if (!window) {
+        LOGE("Failed to create NativeWindow from Surface");
+        return;
+    }
+    g_nativeWindow = NativeWindowPtr(window, NativeWindowDeleter());
 }
 //视频解码主函数
 JNIEXPORT void JNICALL
@@ -390,6 +411,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         releaseJniStrings();
         return;
     }
+    PlaybackSession session;
     //初始化音频解码器
     AVCodecContext *audio_codec_ctx = nullptr;
     if (audio_stream_index >= 0) {
@@ -404,18 +426,17 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 avcodec_free_context(&audio_codec_ctx);
             } else {
                 // 初始化音频渲染器
-                g_audioRenderer = new AudioRenderer();
-                if (!g_audioRenderer->init(audio_codec_ctx->sample_rate,
-                                           audio_codec_ctx->channels,
-                                           AAUDIO_FORMAT_PCM_I16)) {
+                session.audioRenderer.reset(new AudioRenderer());
+                if (!session.audioRenderer->init(audio_codec_ctx->sample_rate,
+                                                 audio_codec_ctx->channels,
+                                                 AAUDIO_FORMAT_PCM_I16)) {
                     __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, "Failed to initialize audio renderer");
-                    delete g_audioRenderer;
-                    g_audioRenderer = nullptr;
+                    session.audioRenderer.reset();
                 } else {
                     int64_t cacheTimeMs = 300;
-                    g_audioRenderer->setSyncThreshold(100);
-                    g_audioRenderer->setAudioStartTime(av_gettime_relative() / 1000 + cacheTimeMs);
-                    g_audioRenderer->start();
+                    session.audioRenderer->setSyncThreshold(100);
+                    session.audioRenderer->setAudioStartTime(av_gettime_relative() / 1000 + cacheTimeMs);
+                    session.audioRenderer->start();
                 }
             }
         }
@@ -434,11 +455,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         }
     }
     /* ------------------------- 线程创建阶段 ------------------------- */
-    g_sessionActive.store(true);
     // 1. 创建队列
-    PacketQueue video_packet_queue;//视频数据包队列
-    PacketQueue audio_packet_queue;//音频数据包队列
-    FrameQueue frameQueue;//帧队列
+    PacketQueue& video_packet_queue = session.videoPacketQueue;//视频数据包队列
+    PacketQueue& audio_packet_queue = session.audioPacketQueue;//音频数据包队列
+    FrameQueue& frameQueue = session.frameQueue;//帧队列
 
     Demuxer demuxer;//解复用器
     Decoder decoder;//解码器
@@ -460,7 +480,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     });
     //音频解码线程
     std::thread audioDecodeThread([&]() {
-        if (!audio_codec_ctx || !g_audioRenderer) return;
+        if (!audio_codec_ctx || !session.audioRenderer) return;
 
         AVFrame *frame = av_frame_alloc();
         AVFrame *tempoFrame = av_frame_alloc();
@@ -614,10 +634,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 frameQueue.clear();
                 
                 // 2. 清空 AAudio 积压
-                if (g_audioRenderer) {
-                    g_audioRenderer->cleanup(); // 销毁底层缓冲
-                    g_audioRenderer->init(audio_codec_ctx->sample_rate, audio_codec_ctx->channels, AAUDIO_FORMAT_PCM_I16);
-                    g_audioRenderer->start();
+                if (session.audioRenderer) {
+                    session.audioRenderer->cleanup(); // 销毁底层缓冲
+                    session.audioRenderer->init(audio_codec_ctx->sample_rate, audio_codec_ctx->channels, AAUDIO_FORMAT_PCM_I16);
+                    session.audioRenderer->start();
                 }
                 releaseTempoGraph();
 
@@ -631,8 +651,8 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 int64_t target_pts_us = g_seekPositionMs.load() * 1000;
                 g_videoClock.store(target_pts_us);
                 g_audioClock.store(target_pts_us);
-                if (g_audioRenderer) {
-                    g_audioRenderer->setFirstAudioPts(target_pts_us);
+                if (session.audioRenderer) {
+                    session.audioRenderer->setFirstAudioPts(target_pts_us);
                 }
                 
                 // 结束 Seek 状态，恢复正常播放
@@ -652,7 +672,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
             // 【重磅修复】：防止音频解码过快导致时钟跑飞
             // 控制音频队列的积压时长最高不超过 500ms
-            if (g_audioRenderer && g_audioRenderer->getPendingAudioDurationUs() > 500000) {
+            if (session.audioRenderer && session.audioRenderer->getPendingAudioDurationUs() > 500000) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 continue;
             }
@@ -681,9 +701,9 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                     if (!g_paused && out_samples > 0) {
                         float speed = sanitizePlaybackSpeed(g_playbackSpeed.load());
                         if (!ensureTempoGraph(speed)) {
-                            g_audioRenderer->writeData(output, out_samples);
+                            session.audioRenderer->writeData(output, out_samples);
                         } else if (!tempoGraph) {
-                            g_audioRenderer->writeData(output, out_samples);
+                            session.audioRenderer->writeData(output, out_samples);
                         } else {
                             av_frame_unref(tempoFrame);
                             tempoFrame->format = AV_SAMPLE_FMT_S16;
@@ -698,16 +718,16 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                                     AVFrame* filtered = av_frame_alloc();
                                     while (av_buffersink_get_frame(tempoSink, filtered) >= 0) {
                                         if (filtered->nb_samples > 0) {
-                                            g_audioRenderer->writeData(filtered->data[0], filtered->nb_samples);
+                                            session.audioRenderer->writeData(filtered->data[0], filtered->nb_samples);
                                         }
                                         av_frame_unref(filtered);
                                     }
                                     av_frame_free(&filtered);
                                 } else {
-                                    g_audioRenderer->writeData(output, out_samples);
+                                    session.audioRenderer->writeData(output, out_samples);
                                 }
                             } else {
-                                g_audioRenderer->writeData(output, out_samples);
+                                session.audioRenderer->writeData(output, out_samples);
                             }
                         }
                     }
@@ -743,7 +763,13 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         };
 
         // 1. 检查NativeWindow有效性
-        if (!g_nativeWindow) {
+        NativeWindowPtr renderWindow;
+        {
+            std::lock_guard<std::mutex> lock(g_nativeWindowMutex);
+            renderWindow = g_nativeWindow;
+        }
+
+        if (!renderWindow) {
             abortRender("RenderThread: NativeWindow is not valid");
             return;
         }
@@ -755,7 +781,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
             return;
         }
 
-        EGLSurface surface = createEGLSurface(display, g_nativeWindow);
+        EGLSurface surface = createEGLSurface(display, renderWindow.get());
         if (surface == EGL_NO_SURFACE) {
             eglTerminate(display);
             abortRender("RenderThread: EGL surface creation failed");
@@ -771,9 +797,9 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         }
 
         // 3. 设置窗口缓冲几何
-        int width = ANativeWindow_getWidth(g_nativeWindow);
-        int height = ANativeWindow_getHeight(g_nativeWindow);
-        ANativeWindow_setBuffersGeometry(g_nativeWindow, width, height, WINDOW_FORMAT_RGBA_8888);
+        int width = ANativeWindow_getWidth(renderWindow.get());
+        int height = ANativeWindow_getHeight(renderWindow.get());
+        ANativeWindow_setBuffersGeometry(renderWindow.get(), width, height, WINDOW_FORMAT_RGBA_8888);
 
         // 4. 初始化渲染器
         Renderer renderer;
@@ -818,10 +844,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 g_currentPositionMs.store(g_videoClock.load() / 1000);
             }
             // 音画同步核心机制
-            if (g_audioRenderer && g_audioClock.load() > 0) {
+            if (session.audioRenderer && g_audioClock.load() > 0) {
                 // 当前听到的声音时间 = 最新放进队列的音频时间 - 队列里还没播的延迟
                 int64_t current_audio_clock = g_audioClock.load();
-                int64_t pending_delay = g_audioRenderer->getPendingAudioDurationUs();
+                int64_t pending_delay = session.audioRenderer->getPendingAudioDurationUs();
                 int64_t exact_audio_pts = current_audio_clock - pending_delay;
                 
                 int64_t video_pts = g_videoClock.load();
@@ -879,10 +905,9 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         LOGD("视频解析完成，未导出YUV文件");
     }
 
-    if (g_audioRenderer) {
-        g_audioRenderer->stop();
-        delete g_audioRenderer;
-        g_audioRenderer = nullptr;
+    if (session.audioRenderer) {
+        session.audioRenderer->stop();
+        session.audioRenderer.reset();
     }
 
     // 7. 关闭文件
@@ -906,7 +931,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     }
 
     releaseJniStrings();
-    g_sessionActive.store(false);
 }
 
 JNIEXPORT jstring JNICALL
@@ -959,13 +983,6 @@ Java_com_example_videodecoder_MainActivity_nativeReleaseAudio(JNIEnv*, jobject) 
     g_isSeeking.store(false);
     g_seekApplied.store(false);
     g_paused.store(false);
-    if (g_sessionActive.load()) {
-        return;
-    }
-    if (g_audioRenderer) {
-        delete g_audioRenderer;
-        g_audioRenderer = nullptr;
-    }
 }
 
 
