@@ -6,11 +6,13 @@
 #define VIDEODECODER_AUDIORENDER_H
 
 
+#include "PlaybackState.h"
 #include <aaudio/AAudio.h>
 #include <mutex>
 #include <queue>
 #include <vector>
 #include <atomic>
+#include <memory>
 
 class AudioRenderer {
 public:
@@ -30,6 +32,7 @@ public:
     void setSyncThreshold(int64_t thresholdMs); // 设置同步阈值（毫秒）
     void setAudioStartTime(int64_t startTimeMs); // 设置音频开始时间
     int64_t getPendingAudioDurationUs(); // 获取当前音频积压的缓冲时长（微秒）
+    void setPlaybackState(const std::shared_ptr<PlaybackState>& state);
     
     void setFirstAudioPts(int64_t pts); // 记录第一帧音频的PTS
     int64_t getExactAudioClockUs(); // 获取绝对精准的硬件播放时钟
@@ -55,6 +58,7 @@ private:
     int channelCount = 0;
     int format = AAUDIO_FORMAT_UNSPECIFIED;
     std::atomic<bool> needsRecovery{false};
+    std::weak_ptr<PlaybackState> playbackState;
 
     static aaudio_data_callback_result_t dataCallback(
             AAudioStream* stream,

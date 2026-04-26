@@ -9,7 +9,6 @@
 #define LOG_TAG "AudioRenderer"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
-extern std::atomic<bool> g_paused;
 
 AudioRenderer::AudioRenderer() = default;
 
@@ -113,6 +112,11 @@ void AudioRenderer::setAudioStartTime(int64_t startTimeMs) {
     audioStartTimeMs.store(startTimeMs);
     isAudioStarted.store(false);
 }
+
+void AudioRenderer::setPlaybackState(const std::shared_ptr<PlaybackState>& state) {
+    playbackState = state;
+}
+
 extern "C" {
 #include <libavutil/time.h>
 }
@@ -153,7 +157,8 @@ aaudio_data_callback_result_t AudioRenderer::dataCallback(
     // Clear buffer first
     memset(audioData, 0, totalBytesNeeded);
 
-    if (g_paused.load()) {
+    auto state = renderer->playbackState.lock();
+    if (state && state->paused.load()) {
         return AAUDIO_CALLBACK_RESULT_CONTINUE;
     }
 

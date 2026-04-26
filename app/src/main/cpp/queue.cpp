@@ -5,16 +5,24 @@
 #include "queue.h"
 #include <chrono>
 
-extern std::atomic<bool> g_stopRequested;
+void PacketQueue::setPlaybackState(const std::shared_ptr<PlaybackState>& state) {
+    std::lock_guard<std::mutex> lock(mutex);
+    playbackState = state;
+    cond.notify_all();
+}
+
+bool PacketQueue::isStopRequested() const {
+    return playbackState && playbackState->stopRequested.load();
+}
 
 void PacketQueue::push(AVPacket* packet) {
     if (!packet) return;
     std::unique_lock<std::mutex> lock(mutex);
     // 限制队列大小，防止 Demuxer 光速读取导致 OOM 爆内存
     cond.wait(lock, [this]() {
-        return queue.size() < 100 || demuxFinished.load() || g_stopRequested.load();
+        return queue.size() < 100 || demuxFinished.load() || isStopRequested();
     });
-    if (g_stopRequested.load()) {
+    if (isStopRequested()) {
         av_packet_free(&packet);
         return;
     }
@@ -25,7 +33,7 @@ void PacketQueue::push(AVPacket* packet) {
 AVPacket* PacketQueue::pop() {
     std::unique_lock<std::mutex> lock(mutex);
     cond.wait_for(lock, std::chrono::milliseconds(10), [this]() {
-        return !queue.empty() || demuxFinished.load() || g_stopRequested.load();
+        return !queue.empty() || demuxFinished.load() || isStopRequested();
     });
     if (queue.empty()) return nullptr;
     AVPacket* pkt = queue.front();

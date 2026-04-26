@@ -6,6 +6,7 @@
 #define VIDEODECODER_DECODER_H
 
 
+#include "PlaybackState.h"
 #include "queue.h"
 
 extern "C" {
@@ -18,7 +19,8 @@ class PacketQueue;
 
 class Decoder {
 public:
-    void decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& queue, FrameQueue& frameQueue);
+    void decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& queue,
+                FrameQueue& frameQueue, PlaybackState& state);
 private:
     FrameQueue frameQueue;  // 声明 FrameQueue 成员变量
 

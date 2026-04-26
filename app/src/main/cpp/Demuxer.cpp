@@ -6,9 +6,9 @@
 #include "queue.h"
 #include <libavutil/error.h>
 //单队列
-void Demuxer::demux(AVFormatContext* fmt_ctx, int video_stream_index, PacketQueue& queue) {
+void Demuxer::demux(AVFormatContext* fmt_ctx, int video_stream_index, PacketQueue& queue, PlaybackState& state) {
     AVPacket *pkt = av_packet_alloc();
-    while (!g_stopRequested.load() && av_read_frame(fmt_ctx, pkt) >= 0) {
+    while (!state.stopRequested.load() && av_read_frame(fmt_ctx, pkt) >= 0) {
         if (pkt->stream_index == video_stream_index) {
             AVPacket *pktCopy = av_packet_alloc();
             av_packet_ref(pktCopy, pkt);
@@ -23,14 +23,15 @@ void Demuxer::demux(AVFormatContext* fmt_ctx, int video_stream_index, PacketQueu
 //双队列
 void Demuxer::demux(AVFormatContext* fmt_ctx,
                     int video_stream_index, PacketQueue& video_queue,
-                    int audio_stream_index, PacketQueue& audio_queue) {
+                    int audio_stream_index, PacketQueue& audio_queue,
+                    PlaybackState& state) {
     AVPacket *pkt = av_packet_alloc();
     while (true) {
-        if (g_stopRequested.load()) {
+        if (state.stopRequested.load()) {
             break;
         }
-        if (g_isSeeking.load()) {
-            int64_t target_pts_ms = g_seekPositionMs.load();
+        if (state.isSeeking.load()) {
+            int64_t target_pts_ms = state.seekPositionMs.load();
             int64_t target_pts_us = target_pts_ms * 1000;
             int seekRet = avformat_seek_file(fmt_ctx, -1, INT64_MIN, target_pts_us, INT64_MAX, AVSEEK_FLAG_BACKWARD);
             if (seekRet < 0) {
@@ -40,13 +41,13 @@ void Demuxer::demux(AVFormatContext* fmt_ctx,
             if (seekRet < 0) {
                 LOGD("Seek failed at %lld ms", static_cast<long long>(target_pts_ms));
             }
-            g_seekApplied.store(true);
+            state.seekApplied.store(true);
             av_packet_unref(pkt);
             continue;
         }
 
-        if (g_paused) {
-            if (g_stopRequested.load()) {
+        if (state.paused.load()) {
+            if (state.stopRequested.load()) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));

@@ -12,12 +12,6 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-// 外部声明全局暂停标志
-extern std::atomic<bool> g_paused;
-extern std::atomic<bool> g_isSeeking;
-extern std::atomic<bool> g_stopRequested;
-
-
 #define LOGE(format, ...) __android_log_print(ANDROID_LOG_ERROR, "Tag", format, ##__VA_ARGS__)
 
 
@@ -32,7 +26,8 @@ void writePlane(FILE* file, const uint8_t* data, int linesize, int width, int he
 }
 }
 
-void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& queue, FrameQueue& frameQueue) {
+void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& queue,
+                     FrameQueue& frameQueue, PlaybackState& state) {
     AVFrame *frame = av_frame_alloc();
     AVFrame *yuvFrame = av_frame_alloc();
     SwsContext* sws_ctx = nullptr;
@@ -41,37 +36,37 @@ void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& que
     AVPixelFormat cachedFormat = AV_PIX_FMT_NONE;
 
     while (true) {
-        if (g_stopRequested.load()) {
+        if (state.stopRequested.load()) {
             break;
         }
-        if (g_isSeeking.load()) {
+        if (state.isSeeking.load()) {
             avcodec_flush_buffers(codec_ctx);
             frameQueue.clear();
             std::this_thread::sleep_for(std::chrono::milliseconds(2));
             continue;
         }
         // 处理暂停状态 - 使用更高效的检查方式
-        while (g_paused.load()) {
-            if (g_stopRequested.load()) {
+        while (state.paused.load()) {
+            if (state.stopRequested.load()) {
                 break;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
-        if (g_stopRequested.load()) {
+        if (state.stopRequested.load()) {
             break;
         }
         AVPacket *pkt = queue.pop();
 
         if (pkt == nullptr) { // End of stream
-            if (queue.isDemuxFinished() || g_stopRequested.load()) {
+            if (queue.isDemuxFinished() || state.stopRequested.load()) {
                 break;
             }
             continue;
         }
         if (avcodec_send_packet(codec_ctx, pkt) == 0) {
             while (avcodec_receive_frame(codec_ctx, frame) == 0) {
-                if (g_isSeeking.load() || g_stopRequested.load()) {
+                if (state.isSeeking.load() || state.stopRequested.load()) {
                     av_frame_unref(frame);
                     break;
                 }
@@ -128,7 +123,7 @@ void Decoder::decode(AVCodecContext* codec_ctx, FILE* yuv_file, PacketQueue& que
                            chromaWidth, chromaHeight);
                 //------------------------------------------
                 //推入frame到渲染队列
-                if (!g_paused.load()) {  // 再次检查暂停状态
+                if (!state.paused.load()) {  // 再次检查暂停状态
                     AVFrame* frameCopy = av_frame_clone(yuvFrame);
                     if (frameCopy) {
                         frameQueue.push(frameCopy);

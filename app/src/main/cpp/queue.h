@@ -5,6 +5,7 @@
 #ifndef VIDEODECODER_QUEUE_H
 #define VIDEODECODER_QUEUE_H
 
+#include "PlaybackState.h"
 #include "android/log.h"
 #define LOGD(...) ((void)__android_log_print(ANDROID_LOG_DEBUG, "VideoDecoder", __VA_ARGS__))
 
@@ -13,6 +14,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <thread>
+#include <memory>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -22,6 +24,7 @@ extern "C" {
 // 数据包队列 (PacketQueue)
 class PacketQueue {
 public:
+    void setPlaybackState(const std::shared_ptr<PlaybackState>& state);
     void push(AVPacket* packet);
     AVPacket* pop();
     bool isDemuxFinished();
@@ -46,6 +49,8 @@ private:
     std::mutex mutex;
     std::condition_variable cond;
     std::atomic<bool> demuxFinished{false};
+    std::shared_ptr<PlaybackState> playbackState;
+    bool isStopRequested() const;
 };
 
 //-----更新分割线-----

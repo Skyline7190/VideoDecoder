@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <unistd.h>
+#include "PlaybackState.h"
 #include "Demuxer.h"
 #include "Decoder.h"
 #include "queue.h"
@@ -25,15 +26,10 @@
 #include <EGL/eglext.h>
 #include <android/native_window.h>
 #include <android/native_window_jni.h> //用于ANativeWindow_fromSurface
-std::atomic<bool> g_isSeeking{false};
-std::atomic<bool> g_seekApplied{false};
-std::atomic<int64_t> g_seekPositionMs{0};
-std::atomic<bool> g_paused{false};
-std::atomic<bool> g_stopRequested{false};
-extern "C" {
 //日志宏定义
 #define LOG_TAG "NativeLib"
 
+extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/avutil.h>
 #include <libavcodec/avcodec.h>
@@ -43,6 +39,7 @@ extern "C" {
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersrc.h>
 #include <libavfilter/buffersink.h>
+}
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 
 /* ========================== 全局变量声明 ========================== */
@@ -59,29 +56,29 @@ using NativeWindowPtr = std::shared_ptr<ANativeWindow>;
 // 全局变量，用于保存 Java 层传入的 Surface 对应的 NativeWindow
 NativeWindowPtr g_nativeWindow;
 std::mutex g_nativeWindowMutex;
-std::atomic<bool> g_decodingFinished{false};// 解码完成标志
-
-// 全局暂停控制变量
-//音频相关变量
-std::atomic<bool> g_audioDecodingFinished{false};
-// 全局变量添加
-std::atomic<int64_t> g_audioClock{0};
-std::atomic<int64_t> g_videoClock{0};
-// 在全局变量区域添加
-std::atomic<int64_t> g_durationMs{0};
-std::atomic<int64_t> g_currentPositionMs{0};
-// 播放速度控制变量
-std::atomic<float> g_playbackSpeed{1.0f};
+std::shared_ptr<PlaybackState> g_currentPlaybackState;
+std::mutex g_playbackStateMutex;
 constexpr float kPlaybackSpeedDefault = 1.0f;
 constexpr float kPlaybackSpeedMin = 0.5f;
 constexpr float kPlaybackSpeedMax = 3.0f;
 
 struct PlaybackSession {
+    std::shared_ptr<PlaybackState> state{std::make_shared<PlaybackState>()};
     PacketQueue videoPacketQueue;
     PacketQueue audioPacketQueue;
     FrameQueue frameQueue;
     std::unique_ptr<AudioRenderer> audioRenderer;
 };
+
+std::shared_ptr<PlaybackState> getCurrentPlaybackState() {
+    std::lock_guard<std::mutex> lock(g_playbackStateMutex);
+    return g_currentPlaybackState;
+}
+
+void setCurrentPlaybackState(const std::shared_ptr<PlaybackState>& state) {
+    std::lock_guard<std::mutex> lock(g_playbackStateMutex);
+    g_currentPlaybackState = state;
+}
 
 inline float sanitizePlaybackSpeed(float speed) {
     if (!std::isfinite(speed)) return kPlaybackSpeedDefault;
@@ -256,6 +253,7 @@ void cleanupEGL(EGLDisplay display, EGLSurface surface, EGLContext context) {
     eglTerminate(display);
 }
 // 设置Surface接口
+extern "C" {
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_setSurface(JNIEnv* env, jobject thiz, jobject surface) {
     std::lock_guard<std::mutex> lock(g_nativeWindowMutex);
@@ -284,14 +282,10 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
             env->ReleaseStringUTFChars(output_path, outPath);
         }
     };
-    g_isSeeking.store(false);
-    g_seekApplied.store(false);
-    g_paused.store(false);
-    g_stopRequested.store(false);
-    g_decodingFinished.store(false);
-    g_audioDecodingFinished.store(false);
-    g_currentPositionMs.store(0);
-    g_durationMs.store(0);
+    PlaybackSession session;
+    auto state = session.state;
+    state->resetForNewPlayback();
+    setCurrentPlaybackState(state);
 
     LOGD("开始解析视频: %s", path);
 
@@ -391,7 +385,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         return;
     }
     if (fmt_ctx->duration != AV_NOPTS_VALUE && fmt_ctx->duration > 0) {
-        g_durationMs.store(static_cast<int64_t>(fmt_ctx->duration / 1000));
+        state->durationMs.store(static_cast<int64_t>(fmt_ctx->duration / 1000));
     }
 
     // 3. 初始化解码器
@@ -411,7 +405,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         releaseJniStrings();
         return;
     }
-    PlaybackSession session;
     //初始化音频解码器
     AVCodecContext *audio_codec_ctx = nullptr;
     if (audio_stream_index >= 0) {
@@ -427,6 +420,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
             } else {
                 // 初始化音频渲染器
                 session.audioRenderer.reset(new AudioRenderer());
+                session.audioRenderer->setPlaybackState(state);
                 if (!session.audioRenderer->init(audio_codec_ctx->sample_rate,
                                                  audio_codec_ctx->channels,
                                                  AAUDIO_FORMAT_PCM_I16)) {
@@ -459,6 +453,8 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     PacketQueue& video_packet_queue = session.videoPacketQueue;//视频数据包队列
     PacketQueue& audio_packet_queue = session.audioPacketQueue;//音频数据包队列
     FrameQueue& frameQueue = session.frameQueue;//帧队列
+    video_packet_queue.setPlaybackState(state);
+    audio_packet_queue.setPlaybackState(state);
 
     Demuxer demuxer;//解复用器
     Decoder decoder;//解码器
@@ -467,14 +463,15 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
     std::thread demuxThread([&]() {
         demuxer.demux(fmt_ctx,
                       video_stream_index, video_packet_queue,
-                      audio_stream_index, audio_packet_queue);
+                      audio_stream_index, audio_packet_queue,
+                      *state);
     });
 
     //3.视频解码线程
     std::thread decodeThread([&]() {
-        decoder.decode(codec_ctx, yuv_file, video_packet_queue,frameQueue);
+        decoder.decode(codec_ctx, yuv_file, video_packet_queue,frameQueue, *state);
         // 通知 Java 解码完成
-        g_decodingFinished = true; // 设置解码完成标志
+        state->decodingFinished.store(true); // 设置解码完成标志
         frameQueue.terminate();
 
     });
@@ -609,11 +606,11 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
         int seekWaitLoops = 0;
         while (true) {
-            if (g_stopRequested.load()) {
+            if (state->stopRequested.load()) {
                 break;
             }
-            if (g_isSeeking.load()) {
-                if (!g_seekApplied.load()) {
+            if (state->isSeeking.load()) {
+                if (!state->seekApplied.load()) {
                     if (seekWaitLoops < 1000) {
                         seekWaitLoops++;
                         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -623,7 +620,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 } else {
                     seekWaitLoops = 0;
                 }
-                if (!g_seekApplied.load()) {
+                if (!state->seekApplied.load()) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
                 // 1. 清空所有的旧数据队列
@@ -636,6 +633,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 // 2. 清空 AAudio 积压
                 if (session.audioRenderer) {
                     session.audioRenderer->cleanup(); // 销毁底层缓冲
+                    session.audioRenderer->setPlaybackState(state);
                     session.audioRenderer->init(audio_codec_ctx->sample_rate, audio_codec_ctx->channels, AAUDIO_FORMAT_PCM_I16);
                     session.audioRenderer->start();
                 }
@@ -648,22 +646,22 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 }
                 
                 // 4. 重置时钟基准
-                int64_t target_pts_us = g_seekPositionMs.load() * 1000;
-                g_videoClock.store(target_pts_us);
-                g_audioClock.store(target_pts_us);
+                int64_t target_pts_us = state->seekPositionMs.load() * 1000;
+                state->videoClock.store(target_pts_us);
+                state->audioClock.store(target_pts_us);
                 if (session.audioRenderer) {
                     session.audioRenderer->setFirstAudioPts(target_pts_us);
                 }
                 
                 // 结束 Seek 状态，恢复正常播放
-                g_seekApplied.store(false);
-                g_isSeeking.store(false);
+                state->seekApplied.store(false);
+                state->isSeeking.store(false);
                 seekWaitLoops = 0;
                 continue;
             }
 
-            if (g_paused) {
-                if (g_stopRequested.load()) {
+            if (state->paused.load()) {
+                if (state->stopRequested.load()) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -679,13 +677,13 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
 
             AVPacket *pkt = audio_packet_queue.pop();
             if (pkt == nullptr) {
-                if (audio_packet_queue.isDemuxFinished() || g_stopRequested.load()) break;
+                if (audio_packet_queue.isDemuxFinished() || state->stopRequested.load()) break;
                 continue;
             }
 
             if (avcodec_send_packet(audio_codec_ctx, pkt) == 0) {
                 while (avcodec_receive_frame(audio_codec_ctx, frame) == 0) {
-                    if (g_stopRequested.load()) {
+                    if (state->stopRequested.load()) {
                         av_frame_unref(frame);
                         break;
                     }
@@ -698,8 +696,8 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                     out_samples = swr_convert(swr_ctx, &output, out_samples,
                                               (const uint8_t**)frame->data, frame->nb_samples);
 
-                    if (!g_paused && out_samples > 0) {
-                        float speed = sanitizePlaybackSpeed(g_playbackSpeed.load());
+                    if (!state->paused.load() && out_samples > 0) {
+                        float speed = sanitizePlaybackSpeed(state->playbackSpeed.load());
                         if (!ensureTempoGraph(speed)) {
                             session.audioRenderer->writeData(output, out_samples);
                         } else if (!tempoGraph) {
@@ -734,9 +732,9 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                     
                     // 必须在写进队列之后更新时钟，代表最后放进队列的帧PTS
                     if (frame->pts != AV_NOPTS_VALUE) {
-                        g_audioClock.store(av_rescale_q(frame->pts,
-                                                        fmt_ctx->streams[audio_stream_index]->time_base,
-                                                        AV_TIME_BASE_Q));
+                        state->audioClock.store(av_rescale_q(frame->pts,
+                                                             fmt_ctx->streams[audio_stream_index]->time_base,
+                                                             AV_TIME_BASE_Q));
                     }
 
                     av_freep(&output);
@@ -749,14 +747,14 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         av_frame_free(&tempoFrame);
         releaseTempoGraph();
         swr_free(&swr_ctx);
-        g_audioDecodingFinished = true;
+        state->audioDecodingFinished.store(true);
     });
 
     //4.视频渲染线程
     std::thread renderThread([&]() {
         auto abortRender = [&](const char* message) {
             LOGE("%s", message);
-            g_stopRequested.store(true);
+            state->stopRequested.store(true);
             video_packet_queue.notifyAll();
             audio_packet_queue.notifyAll();
             frameQueue.terminate();
@@ -820,12 +818,12 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                                 (1000000 / 30); // 默认30fps
 
         while (true) {
-            if (g_stopRequested.load()) {
+            if (state->stopRequested.load()) {
                 break;
             }
             // 检查暂停状态
-            if (g_paused) {
-                if (g_stopRequested.load()) {
+            if (state->paused.load()) {
+                if (state->stopRequested.load()) {
                     break;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -833,24 +831,24 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
             }
             AVFrame* frame = frameQueue.pop(); // 阻塞式获取
             if (!frame) {
-                if (g_decodingFinished || g_stopRequested.load()) break; // 终止信号
+                if (state->decodingFinished.load() || state->stopRequested.load()) break; // 终止信号
                 continue;
             }
             // 更新视频时钟
             if (frame->pts != AV_NOPTS_VALUE) {
-                g_videoClock.store(av_rescale_q(frame->pts,
-                                                fmt_ctx->streams[video_stream_index]->time_base,
-                                                AV_TIME_BASE_Q));
-                g_currentPositionMs.store(g_videoClock.load() / 1000);
+                state->videoClock.store(av_rescale_q(frame->pts,
+                                                     fmt_ctx->streams[video_stream_index]->time_base,
+                                                     AV_TIME_BASE_Q));
+                state->currentPositionMs.store(state->videoClock.load() / 1000);
             }
             // 音画同步核心机制
-            if (session.audioRenderer && g_audioClock.load() > 0) {
+            if (session.audioRenderer && state->audioClock.load() > 0) {
                 // 当前听到的声音时间 = 最新放进队列的音频时间 - 队列里还没播的延迟
-                int64_t current_audio_clock = g_audioClock.load();
+                int64_t current_audio_clock = state->audioClock.load();
                 int64_t pending_delay = session.audioRenderer->getPendingAudioDurationUs();
                 int64_t exact_audio_pts = current_audio_clock - pending_delay;
                 
-                int64_t video_pts = g_videoClock.load();
+                int64_t video_pts = state->videoClock.load();
                 
                 if (exact_audio_pts > 0 && video_pts > 0) {
                     int64_t diff = video_pts - exact_audio_pts;
@@ -859,7 +857,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                     if (diff > 0) {  
                         // 视频比音频快了，睡眠等待
                         // 【增加倍速支持】：等待时间需要除以播放速度
-                        float speed = g_playbackSpeed.load();
+                        float speed = state->playbackSpeed.load();
                         speed = sanitizePlaybackSpeed(speed);
                         int64_t sleep_time = static_cast<int64_t>(diff / speed);
                         if (sleep_time > 100000) sleep_time = 100000; // 单次最多只睡 100ms
@@ -871,7 +869,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 // 没有音频时的降级逻辑（基于帧率）
                 auto now = std::chrono::high_resolution_clock::now();
                 auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(now - lastFrameTime).count();
-                float speed = sanitizePlaybackSpeed(g_playbackSpeed.load());
+                float speed = sanitizePlaybackSpeed(state->playbackSpeed.load());
                 int64_t targetFrameDuration = static_cast<int64_t>(frameDuration / speed);
                 if (targetFrameDuration < 1000) targetFrameDuration = 1000;
                 if (elapsed < targetFrameDuration) {
@@ -939,50 +937,65 @@ Java_com_example_videodecoder_MainActivity_stringFromJNI(JNIEnv *env, jobject th
 }
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_setPlaybackSpeed(JNIEnv *env, jobject thiz, jfloat speed) {
-    g_playbackSpeed.store(sanitizePlaybackSpeed(speed));
+    auto state = getCurrentPlaybackState();
+    if (state) {
+        state->playbackSpeed.store(sanitizePlaybackSpeed(speed));
+    }
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_seekToPosition(JNIEnv *env, jobject thiz, jint progressMs) {
+    auto state = getCurrentPlaybackState();
+    if (!state) {
+        return;
+    }
     int64_t targetMs = progressMs;
-    int64_t durationMs = g_durationMs.load();
+    int64_t durationMs = state->durationMs.load();
     if (targetMs < 0) targetMs = 0;
     if (durationMs > 0 && targetMs > durationMs) targetMs = durationMs;
-    g_seekPositionMs.store(targetMs);
-    g_currentPositionMs.store(targetMs);
-    g_seekApplied.store(false);
-    g_isSeeking.store(true);
+    state->seekPositionMs.store(targetMs);
+    state->currentPositionMs.store(targetMs);
+    state->seekApplied.store(false);
+    state->isSeeking.store(true);
 }
 
 JNIEXPORT jint JNICALL
 Java_com_example_videodecoder_MainActivity_getDurationMs(JNIEnv*, jobject) {
-    return static_cast<jint>(g_durationMs.load());
+    auto state = getCurrentPlaybackState();
+    return state ? static_cast<jint>(state->durationMs.load()) : 0;
 }
 
 JNIEXPORT jint JNICALL
 Java_com_example_videodecoder_MainActivity_getCurrentPositionMs(JNIEnv*, jobject) {
-    return static_cast<jint>(g_currentPositionMs.load());
+    auto state = getCurrentPlaybackState();
+    return state ? static_cast<jint>(state->currentPositionMs.load()) : 0;
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_pauseDecoding(JNIEnv*, jobject) {
-    if (!g_paused.exchange(true)) {  // 原子性地设置为true，并返回之前的值
+    auto state = getCurrentPlaybackState();
+    if (state && !state->paused.exchange(true)) {  // 原子性地设置为true，并返回之前的值
         __android_log_print(ANDROID_LOG_DEBUG, "PauseResume", "Pausing playback");
     }
 }
 
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_resumeDecoding(JNIEnv*, jobject) {
-    if (g_paused.exchange(false)) {  // 原子性地设置为false，并返回之前的值
+    auto state = getCurrentPlaybackState();
+    if (state && state->paused.exchange(false)) {  // 原子性地设置为false，并返回之前的值
         __android_log_print(ANDROID_LOG_DEBUG, "PauseResume", "Resuming playback");
     }
 }
 JNIEXPORT void JNICALL
 Java_com_example_videodecoder_MainActivity_nativeReleaseAudio(JNIEnv*, jobject) {
-    g_stopRequested.store(true);
-    g_isSeeking.store(false);
-    g_seekApplied.store(false);
-    g_paused.store(false);
+    auto state = getCurrentPlaybackState();
+    if (!state) {
+        return;
+    }
+    state->stopRequested.store(true);
+    state->isSeeking.store(false);
+    state->seekApplied.store(false);
+    state->paused.store(false);
 }
 
 
