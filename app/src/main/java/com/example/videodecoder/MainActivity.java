@@ -44,6 +44,7 @@ public class MainActivity extends AppCompatActivity {
     private Button speed2Button;
     private Button speed3Button;
     private Button decodeVideoButton;
+    private float selectedSpeed = 1.0f;
     private SeekBar seekBar;
     //
 
@@ -283,6 +284,43 @@ public class MainActivity extends AppCompatActivity {
 
         startEntranceAnimations();
 
+        // ----------------- 新增：集成Liquid Glass Compose UI -----------------
+        androidx.compose.ui.platform.ComposeView composeView = findViewById(R.id.compose_view);
+        if (composeView != null) {
+            LiquidGlassHelper.INSTANCE.setup(composeView);
+            LiquidGlassHelper.INSTANCE.setSelectedSpeed(selectedSpeed);
+            LiquidGlassHelper.INSTANCE.setActions(new LiquidActions() {
+                @Override
+                public void onSelect() {
+                    selectVideoButton.performClick();
+                }
+
+                @Override
+                public void onDecode() {
+                    decodeVideoButton.performClick();
+                }
+
+                @Override
+                public void onPlay() {
+                    playButton.performClick();
+                }
+
+                @Override
+                public void onPause() {
+                    pauseButton.performClick();
+                }
+
+                @Override
+                public void onSpeed(float speed) {
+                    if (speed == 0.5f) speed05Button.performClick();
+                    else if (speed == 1.0f) speed1Button.performClick();
+                    else if (speed == 2.0f) speed2Button.performClick();
+                    else if (speed == 3.0f) speed3Button.performClick();
+                }
+            });
+        }
+        // ------------------------------------------------------------------
+
     }
     // 新增native方法声明
 
@@ -355,6 +393,8 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "请先开始解析视频", Toast.LENGTH_SHORT).show();
             return;
         }
+        selectedSpeed = speed;
+        LiquidGlassHelper.INSTANCE.setSelectedSpeed(speed);
         setPlaybackSpeed(PlaybackInputPolicy.sanitizeSpeed(speed));
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
     }
@@ -440,6 +480,10 @@ public class MainActivity extends AppCompatActivity {
     private void setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState state) {
         playbackUiState = state;
         runOnUiThread(() -> {
+            
+            // 同步给Liquid Glass UI
+            LiquidGlassHelper.INSTANCE.setPlaying(state == PlaybackUiPolicy.PlaybackUiState.PLAYING);
+
             PlaybackUiPolicy.ControlState controlState = PlaybackUiPolicy.resolve(state);
             updateUiStateColorScheme(state);
             if (decodeVideoButton != null) {
@@ -517,39 +561,39 @@ public class MainActivity extends AppCompatActivity {
             case PLAYING:
                 return new StateColorScheme(
                         "UNDERGO",
-                        R.color.state_undergo_chip_bg,
-                        R.color.state_undergo_chip_text,
-                        R.color.state_undergo_card_bg,
-                        R.color.state_undergo_button_bg,
-                        R.color.state_undergo_button_text
+                        R.color.liquid_state_playing_chip_bg,
+                        R.color.liquid_state_playing_chip_text,
+                        R.color.liquid_state_playing_card_bg,
+                        R.color.liquid_state_playing_button_bg,
+                        R.color.liquid_state_playing_button_text
                 );
             case PAUSED:
                 return new StateColorScheme(
                         "NEAR",
-                        R.color.state_near_chip_bg,
-                        R.color.state_near_chip_text,
-                        R.color.state_near_card_bg,
-                        R.color.state_near_button_bg,
-                        R.color.state_near_button_text
+                        R.color.liquid_state_paused_chip_bg,
+                        R.color.liquid_state_paused_chip_text,
+                        R.color.liquid_state_paused_card_bg,
+                        R.color.liquid_state_paused_button_bg,
+                        R.color.liquid_state_paused_button_text
                 );
             case IDLE:
                 return new StateColorScheme(
                         "PASSED",
-                        R.color.state_passed_chip_bg,
-                        R.color.state_passed_chip_text,
-                        R.color.state_passed_card_bg,
-                        R.color.state_passed_button_bg,
-                        R.color.state_passed_button_text
+                        R.color.liquid_state_idle_chip_bg,
+                        R.color.liquid_state_idle_chip_text,
+                        R.color.liquid_state_idle_card_bg,
+                        R.color.liquid_state_idle_button_bg,
+                        R.color.liquid_state_idle_button_text
                 );
             case READY:
             default:
                 return new StateColorScheme(
                         "COMPLETED",
-                        R.color.state_completed_chip_bg,
-                        R.color.state_completed_chip_text,
-                        R.color.state_completed_card_bg,
-                        R.color.state_completed_button_bg,
-                        R.color.state_completed_button_text
+                        R.color.liquid_state_ready_chip_bg,
+                        R.color.liquid_state_ready_chip_text,
+                        R.color.liquid_state_ready_card_bg,
+                        R.color.liquid_state_ready_button_bg,
+                        R.color.liquid_state_ready_button_text
                 );
         }
     }

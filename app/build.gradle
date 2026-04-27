@@ -1,10 +1,12 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.compose)
 }
 
 android {
     namespace 'com.example.videodecoder'
-    compileSdk 35
+    compileSdk 36
 
     defaultConfig {
         applicationId "com.example.videodecoder"
@@ -16,17 +18,11 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         externalNativeBuild {
             cmake {
-                // cppFlags "" // 这样写，默认是四大CPU架构平台
-
-                // 指定CPU架构是arm64-v8a 【注意：这里只指定本地库到armeabi-v7a】
                 abiFilters "arm64-v8a"
             }
         }
 
-
-        // 下面代码不写，默认是四大CPU架构平台
         ndk {
-            // 指定CPU架构是arm64-v8a  【注意：这里只指定编译所有库到armeabi-v7a进apk】
             abiFilters("arm64-v8a")
         }
     }
@@ -41,6 +37,9 @@ android {
         sourceCompatibility JavaVersion.VERSION_11
         targetCompatibility JavaVersion.VERSION_11
     }
+    kotlinOptions {
+        jvmTarget = '11'
+    }
     externalNativeBuild {
         cmake {
             path file('src/main/cpp/CMakeLists.txt')
@@ -49,14 +48,29 @@ android {
     }
     buildFeatures {
         viewBinding true
+        compose true
     }
 }
 
 dependencies {
-
     implementation libs.appcompat
     implementation libs.material
     implementation libs.constraintlayout
+    
+    // Jetpack Compose
+    def composeBom = platform(libs.compose.bom)
+    implementation composeBom
+    androidTestImplementation composeBom
+    implementation libs.compose.ui
+    implementation libs.compose.ui.graphics
+    implementation libs.compose.ui.tooling.preview
+    implementation libs.compose.material3
+    implementation libs.compose.activity
+
+    // Liquid Glass (Backdrop)
+    implementation libs.backdrop
+    implementation libs.kyant.shapes
+
     testImplementation libs.junit
     androidTestImplementation libs.ext.junit
     androidTestImplementation libs.espresso.core

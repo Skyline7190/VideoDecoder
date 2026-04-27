@@ -46,4 +46,37 @@
     <color name="state_completed_card_bg">#DAEEE9</color>
     <color name="state_completed_button_bg">#2A8B77</color>
     <color name="state_completed_button_text">#FFFFFF</color>
+
+    <!-- Liquid glass unified palette -->
+    <color name="liquid_surface_start">#F7FBFF</color>
+    <color name="liquid_surface_mid">#EAF2FF</color>
+    <color name="liquid_surface_end">#E6EEFF</color>
+    <color name="liquid_card_bg">#73FFFFFF</color>
+    <color name="liquid_card_bg_strong">#8AFFFFFF</color>
+    <color name="liquid_card_stroke">#8AFFFFFF</color>
+    <color name="liquid_card_stroke_subtle">#66FFFFFF</color>
+
+    <color name="liquid_state_playing_chip_bg">#A61FB489</color>
+    <color name="liquid_state_playing_chip_text">#F3FFF9</color>
+    <color name="liquid_state_playing_card_bg">#7AFFFFFF</color>
+    <color name="liquid_state_playing_button_bg">#20A97E</color>
+    <color name="liquid_state_playing_button_text">#FFFFFF</color>
+
+    <color name="liquid_state_paused_chip_bg">#A6E98A92</color>
+    <color name="liquid_state_paused_chip_text">#FFF7F8</color>
+    <color name="liquid_state_paused_card_bg">#86FFFFFF</color>
+    <color name="liquid_state_paused_button_bg">#D86979</color>
+    <color name="liquid_state_paused_button_text">#FFFFFF</color>
+
+    <color name="liquid_state_idle_chip_bg">#A67DA6D9</color>
+    <color name="liquid_state_idle_chip_text">#F2F8FF</color>
+    <color name="liquid_state_idle_card_bg">#80FFFFFF</color>
+    <color name="liquid_state_idle_button_bg">#4D84C5</color>
+    <color name="liquid_state_idle_button_text">#FFFFFF</color>
+
+    <color name="liquid_state_ready_chip_bg">#A661B7D6</color>
+    <color name="liquid_state_ready_chip_text">#EDFCFF</color>
+    <color name="liquid_state_ready_card_bg">#84FFFFFF</color>
+    <color name="liquid_state_ready_button_bg">#2A9FC8</color>
+    <color name="liquid_state_ready_button_text">#FFFFFF</color>
 </resources>
