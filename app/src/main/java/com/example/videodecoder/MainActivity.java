@@ -5,8 +5,11 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import android.content.Intent;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
+import android.graphics.Color;
 import android.graphics.SurfaceTexture;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -16,6 +19,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Surface;
 import android.view.TextureView;
+import android.view.Window;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -107,7 +113,9 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        configureEdgeToEdgeWindow();
         setContentView(R.layout.activity_main);
+        applySystemBarInsets();
 
         // 初始化SeekBar
         seekBar = findViewById(R.id.seek_bar);
@@ -310,6 +318,93 @@ public class MainActivity extends AppCompatActivity {
 
     }
     // 新增native方法声明
+
+    private void configureEdgeToEdgeWindow() {
+        Window window = getWindow();
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Color.TRANSPARENT);
+
+        boolean lightSystemBars = shouldUseLightSystemBarIcons();
+        View decorView = window.getDecorView();
+        int flags = decorView.getSystemUiVisibility()
+                | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (lightSystemBars) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (lightSystemBars) {
+                flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            } else {
+                flags &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+        }
+        decorView.setSystemUiVisibility(flags);
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false);
+            WindowInsetsController controller = window.getInsetsController();
+            if (controller != null) {
+                int lightBars = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                        | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                controller.setSystemBarsAppearance(lightSystemBars ? lightBars : 0, lightBars);
+            }
+        }
+    }
+
+    private boolean shouldUseLightSystemBarIcons() {
+        int nightMode = getResources().getConfiguration().uiMode
+                & Configuration.UI_MODE_NIGHT_MASK;
+        return nightMode != Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    private void applySystemBarInsets() {
+        View playerContent = findViewById(R.id.player_content);
+        if (playerContent == null) {
+            return;
+        }
+
+        final int initialLeft = playerContent.getPaddingLeft();
+        final int initialTop = playerContent.getPaddingTop();
+        final int initialRight = playerContent.getPaddingRight();
+        final int initialBottom = playerContent.getPaddingBottom();
+
+        playerContent.setOnApplyWindowInsetsListener((view, insets) -> {
+            int insetLeft;
+            int insetTop;
+            int insetRight;
+            int insetBottom;
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.graphics.Insets systemBars =
+                        insets.getInsets(WindowInsets.Type.systemBars());
+                insetLeft = systemBars.left;
+                insetTop = systemBars.top;
+                insetRight = systemBars.right;
+                insetBottom = systemBars.bottom;
+            } else {
+                insetLeft = insets.getSystemWindowInsetLeft();
+                insetTop = insets.getSystemWindowInsetTop();
+                insetRight = insets.getSystemWindowInsetRight();
+                insetBottom = insets.getSystemWindowInsetBottom();
+            }
+
+            view.setPadding(
+                    initialLeft + insetLeft,
+                    initialTop + insetTop,
+                    initialRight + insetRight,
+                    initialBottom + insetBottom
+            );
+            return insets;
+        });
+        playerContent.requestApplyInsets();
+    }
 
     private void configureVideoStage() {
         View videoStage = findViewById(R.id.video_stage);

@@ -27,11 +27,14 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -52,7 +55,6 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.isSpecified
@@ -71,7 +73,6 @@ import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.Backdrop
-import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -257,7 +258,7 @@ fun LiquidButton(
             }
             .clickable(
                 interactionSource = interactionSource,
-                indication = null,
+                indication = glassRipple(color = Color.White),
                 enabled = enabled,
                 role = Role.Button,
                 onClick = onClick
@@ -270,6 +271,7 @@ fun LiquidButton(
     ) {
         val resolvedTextColor =
             when {
+                active && enabled -> Color(0xFF0091FF)
                 textColor.isSpecified -> textColor
                 tint.isSpecified -> Color.White
                 else -> Color.Black
@@ -299,7 +301,15 @@ fun LiquidControlsOverlay(
     onSpeed: (Float) -> Unit,
     onSeekTo: (Int) -> Unit
 ) {
-    MaterialTheme(colorScheme = darkColorScheme()) {
+    MaterialTheme(colorScheme = darkColorScheme().copy(
+        surface = Color.Transparent,
+        surfaceVariant = Color.Transparent,
+        surfaceContainerLow = Color.Transparent,
+        surfaceContainer = Color.Transparent,
+        surfaceContainerHigh = Color.Transparent,
+        surfaceContainerHighest = Color.Transparent,
+        surfaceDim = Color.Transparent
+    )) {
         val uiSensor = rememberUISensor()
         val highlightAngle = uiSensor.gravityAngle
         val backdrop = rememberLayerBackdrop()
@@ -326,7 +336,8 @@ fun LiquidControlsOverlay(
                 .background(Color.Transparent)
         ) {
             val pageHorizontalPadding = 16.dp
-            val pageTopPadding = 14.dp
+            val pageTopPadding =
+                WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + 14.dp
             val headerHeight = 96.dp
             val headerToVideoGap = 12.dp
             val videoToProgressGap = 4.dp
@@ -341,13 +352,6 @@ fun LiquidControlsOverlay(
                 modifier = Modifier
                     .matchParentSize()
                     .layerBackdrop(backdrop)
-                    .background(
-                        Brush.verticalGradient(
-                            0f to Color.Transparent,
-                            0.42f to Color.Transparent,
-                            1f to Color.Black.copy(alpha = 0.04f)
-                        )
-                    )
             )
 
             HeaderPanel(
@@ -740,7 +744,7 @@ private fun SpeedBottomTabs(
                 velocityDampingRatio = 0.42f,
                 velocityStiffness = 220f,
                 initialScale = 1f,
-                pressedScale = 1.46f,
+                pressedScale = 78f / 56f,
                 onDragStarted = {},
                 onDragStopped = {
                     val targetIndex = targetValue.fastRoundToInt().fastCoerceIn(0, tabsCount - 1)
@@ -809,12 +813,11 @@ private fun SpeedBottomTabs(
                         )
                     },
                     onDrawSurface = {
-                        drawRect(Color.White.copy(alpha = 0.16f))
-                        drawRect(Color.Black.copy(alpha = 0.06f), blendMode = BlendMode.Multiply)
+                        drawRect(Color.Black.copy(alpha = 0.4f))
                     }
                 )
                 .then(interactiveHighlight.modifier)
-                .height(56.dp)
+                .height(64.dp)
                 .fillMaxWidth()
                 .padding(4.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -842,8 +845,12 @@ private fun SpeedBottomTabs(
                     .clearAndSetSemantics {}
                     .alpha(0f)
                     .layerBackdrop(tabsBackdrop)
-                    .graphicsLayer { translationX = panelOffset }
-                    .height(56.dp)
+                    .graphicsLayer {
+                        translationX = panelOffset
+                        val accentColor = Color(0xFF0091FF)
+                        this.colorFilter = androidx.compose.ui.graphics.ColorFilter.tint(accentColor)
+                    }
+                    .height(64.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
@@ -887,12 +894,12 @@ private fun SpeedBottomTabs(
                     },
                     highlight = {
                         val progress = dampedDragAnimation.pressProgress
-                        Highlight.Default.copy(alpha = lerp(0.65f, 1f, progress))
+                        Highlight.Default.copy(alpha = progress)
                             .copy(style = HighlightStyle.Default(angle = highlightAngle, falloff = 1.6f))
                     },
                     shadow = {
                         val progress = dampedDragAnimation.pressProgress
-                        Shadow(alpha = lerp(0.22f, 1f, progress))
+                        Shadow(alpha = progress)
                     },
                     innerShadow = {
                         val progress = dampedDragAnimation.pressProgress
@@ -907,9 +914,8 @@ private fun SpeedBottomTabs(
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress
-                        drawRect(Color.White.copy(alpha = 0.24f), alpha = 1f - progress)
-                        drawRect(Color.White.copy(alpha = 0.12f * progress), blendMode = BlendMode.Plus)
-                        drawRect(Color.Black.copy(alpha = 0.02f * progress))
+                        drawRect(Color.White.copy(alpha = 0.1f), alpha = 1f - progress)
+                        drawRect(Color.Black.copy(alpha = 0.03f * progress))
                     }
                 )
                 .height(48.dp)
@@ -934,8 +940,8 @@ private fun RowScope.SpeedBottomTab(
             .fillMaxHeight()
             .clip(Capsule())
             .clickable(
-                interactionSource = null,
-                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = glassRipple(color = Color.White),
                 role = Role.Tab,
                 onClick = onClick
             )
@@ -948,7 +954,7 @@ private fun RowScope.SpeedBottomTab(
     ) {
         Text(
             text = label,
-            color = if (active) Color.White else Color.White.copy(alpha = 0.58f),
+            color = if (active) Color(0xFF0091FF) else Color.White.copy(alpha = 0.58f),
             fontSize = 13.sp,
             fontWeight = if (active) FontWeight.Bold else FontWeight.SemiBold
         )

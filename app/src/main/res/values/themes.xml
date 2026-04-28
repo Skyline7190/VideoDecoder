@@ -17,9 +17,12 @@
         <item name="colorSurfaceContainerHigh">#E5EEFF</item>
         <item name="colorOutline">#8FA4BB</item>
         <item name="colorOutlineVariant">#CCDAEC</item>
-        <item name="android:statusBarColor">#8FA3BD</item>
-        <item name="android:navigationBarColor">#8FA3BD</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:windowBackground">@drawable/wallpaper_light</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:enforceStatusBarContrast">false</item>
+        <item name="android:enforceNavigationBarContrast">false</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
     </style>
 </resources>

@@ -120,30 +120,50 @@ The project integrates the AndroidLiquidGlass style to create an iOS/visionOS-li
 3. **Visual Consistency**
    - Top status panel, progress panel, and button panel share the same Liquid Glass visual language.
    - Select, decode, play/pause, and speed controls use transparent glass styling instead of strong red/blue tint blocks.
-   - The background is a dark player surface to keep white text and glass controls readable.
+   - The background uses `wallpaper_light.webp` from AndroidLiquidGlass as the root/window background with edge-to-edge window rendering.
    - Playback state is synchronized through `LiquidGlassHelper` and reflected in button activity and status text.
+   - Active button and speed tab text uses accent blue (`#0091FF`) instead of white.
+
+4. **Ripple Effect** (`Ripple.kt`)
+   - Custom `glassRipple()` with reduced alpha values (pressed 0.1, dragged 0.16, hovered 0.08) for a subtler glass feel.
+   - Uses `createRippleModifierNode` from `androidx.compose.material.ripple`.
+
+5. **Parameter Alignment with AndroidLiquidGlass Catalog**
+   - `LiquidSlider.kt`: thumb 40×24dp, track 6dp, shadow alpha 0.05f.
+   - `SpeedBottomTabs`: container 64dp, pressedScale 78/56, indicator highlight/shadow alpha follows `progress`, indicator `onDrawSurface` uses theme-aware dark color (`White.copy(0.1f)`).
+   - Invisible tab layer retains `layerBackdrop` capture with `ColorFilter.tint(accentColor)` for indicator backdrop.
+
+6. **Edge-to-Edge Window**
+   - `configureEdgeToEdgeWindow()` sets transparent status/navigation bars with `LAYOUT_STABLE | LAYOUT_FULLSCREEN | LAYOUT_HIDE_NAVIGATION`.
+   - `applySystemBarInsets()` applies system bar insets to `player_content` so content is properly positioned below system bars.
+   - Theme enforces `enforceStatusBarContrast=false` and `enforceNavigationBarContrast=false` to prevent system from drawing opaque bar backgrounds.
+   - The former gray strip at the top of the wallpaper was caused by Android drawing a separate opaque status-bar background over the page, not by the wallpaper image.
+   - The fix keeps the wallpaper edge-to-edge while adding status-bar spacing back to View and Compose content (`player_content` and `WindowInsets.statusBars`), so controls stay below system icons.
 
 ### File Map
 
 ```text
 app/
 ├─ src/main/java/com/example/videodecoder/
-│  ├─ MainActivity.java              # Java entry, TextureView, JNI calls, state sync
+│  ├─ MainActivity.java              # Java entry, TextureView, JNI calls, edge-to-edge, state sync
 │  ├─ LiquidControls.kt              # Compose Liquid Glass panels and buttons
 │  ├─ LiquidSlider.kt                # Liquid Glass progress slider
 │  ├─ DampedDragAnimation.kt         # Drag deformation and release animation
 │  ├─ LiquidGlassHelper.kt           # Java -> Compose state bridge
 │  ├─ InteractiveHighlight.kt        # Press highlight and elastic deformation
 │  ├─ DragGestureInspector.kt        # Gesture parser
+│  ├─ Ripple.kt                      # Custom glass ripple with reduced alpha
+│  ├─ UISensor.kt                    # Accelerometer-driven lighting angle with threshold filter
 │  ├─ PlaybackInputPolicy.java
 │  ├─ PlaybackTimeFormatter.java
 │  └─ PlaybackUiPolicy.java
 ├─ src/main/res/layout/
 │  └─ activity_main.xml              # Four-zone layout skeleton and ComposeView container
 ├─ src/main/res/drawable/
+│  ├─ wallpaper_light.webp           # Light gradient wallpaper background
 │  ├─ bg_deadliner_surface.xml
 │  ├─ bg_deadliner_chip.xml
-│  └─ bg_liquid_player_surface.xml   # Dark player background
+│  └─ bg_liquid_player_surface.xml   # Legacy dark player background
 └─ src/main/cpp/
    ├─ native-lib.cpp
    ├─ MediaInput.cpp/.h
@@ -398,11 +418,16 @@ flowchart LR
 ## UI Design and Interaction
 
 - **Four-zone layout**: top text/status, video, progress, and button control areas.
+- **Edge-to-edge window**: transparent status/navigation bars with system bar inset handling; `enforceStatusBarContrast=false` prevents opaque system bar backgrounds.
+- **Wallpaper background**: `wallpaper_light.webp` from AndroidLiquidGlass as full-screen page background.
+- **Top gray strip fix**: the wallpaper now renders behind the status bar; system bar insets are applied to content instead of letting Android fill the status bar with a separate gray theme color.
 - **Top information panel**: Liquid Glass surface synchronized through `LiquidGlassHelper.setStatusText()`.
 - **Progress placement**: progress stays close to the video area; buttons stay close to progress.
 - **Unified transparent glass controls**: select, decode, play/pause, and speed controls share the same backdrop language.
 - **State linkage**: `MainActivity` maps playback state to chips, button activity, progress, and Compose state.
 - **Motion rhythm**: entrance and state transitions use subtle fade/slide animation; active buttons use lightweight breathing motion.
+- **Visual parameter alignment**: slider thumb 40×24dp, track 6dp; speed tabs container 64dp, indicator alpha follows press progress.
+- **Custom ripple**: `glassRipple()` with reduced alpha for subtler glass feedback.
 
 ---
 

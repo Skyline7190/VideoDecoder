@@ -190,7 +190,7 @@ fun LiquidSlider(
                 Modifier
                     .clip(Capsule())
                     .background(trackColor)
-                    .height(7.dp)
+                    .height(6.dp)
                     .fillMaxWidth()
             )
 
@@ -198,7 +198,7 @@ fun LiquidSlider(
                 Modifier
                     .clip(Capsule())
                     .background(accentColor.copy(alpha = if (enabled) 1f else 0.35f))
-                    .height(7.dp)
+                    .height(6.dp)
                     .layout { measurable, constraints ->
                         val placeable = measurable.measure(constraints)
                         val width = (constraints.maxWidth * dampedDragAnimation.progress)
@@ -253,7 +253,7 @@ fun LiquidSlider(
                     shadow = {
                         Shadow(
                             radius = 4.dp,
-                            color = Color.Black.copy(alpha = 0.08f)
+                            color = Color.Black.copy(alpha = 0.05f)
                         )
                     },
                     innerShadow = {
@@ -272,7 +272,7 @@ fun LiquidSlider(
                         drawRect(Color.White.copy(alpha = 1f - progress))
                     }
                 )
-                .size(42.dp, 25.dp)
+                .size(40.dp, 24.dp)
         )
     }
 }

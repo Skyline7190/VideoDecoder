@@ -120,23 +120,42 @@ flowchart TB
 
 3.  **视觉统一**：
    - **全局配色**：`colors.xml` 和 `themes.xml` 引入 `liquid_*` 调色板，统一背景、卡片、描边。
-   - **全页风格**：页面背景 (`bg_deadliner_surface.xml`)、Chip (`bg_deadliner_chip.xml`)、所有卡片和按钮 tint 统一到液态玻璃语言。
-   - **呼吸脉冲**：Active 按钮带有 `rememberInfiniteTransition` 驱动的微弱呼吸动效，增强“活着的玻璃”质感。
+   - **全页风格**：页面背景使用 AndroidLiquidGlass 的 `wallpaper_light.webp` 壁纸，作为根布局/window background 渲染，配合 edge-to-edge 窗口实现全屏沉浸。
+   - **呼吸脉冲**：Active 按钮带有 `rememberInfiniteTransition` 驱动的微弱呼吸动效，增强”活着的玻璃”质感。
    - **状态联动**：播放状态（PLAYING/PAUSED/IDLE/READY）精准映射到 `LiquidGlassHelper` 的 `isPlayingState` 和 `selectedSpeedState`，动态高亮当前激活按钮。
    - **透明玻璃按钮**：选择、解析、播放/暂停、倍速按钮统一为透明液态玻璃质感，避免蓝/红色块破坏播放器观感。
+   - **激活态蓝字**：选中按钮和倍速标签文字使用蓝色 `#0091FF`。
+
+4.  **Ripple 涟漪效果** (`Ripple.kt`)
+   - 自定义 `glassRipple()`，降低涟漪透明度（pressed 0.1, dragged 0.16, hovered 0.08），更贴合液态玻璃质感。
+   - 基于 `createRippleModifierNode` 实现。
+
+5.  **视觉参数对齐 AndroidLiquidGlass Catalog**
+   - `LiquidSlider.kt`：滑块 40×24dp，轨道 6dp，阴影透明度 0.05f。
+   - `SpeedBottomTabs`：容器高度 64dp，pressedScale 78/56，指示器高光/阴影透明度跟随 `progress`，指示器 `onDrawSurface` 使用深色主题色（`White.copy(0.1f)`）。
+   - 隐藏标签层保留 `layerBackdrop` 捕获并应用 `ColorFilter.tint(accentColor)` 供指示器 backdrop 使用。
+
+6.  **Edge-to-Edge 全屏窗口**
+   - `configureEdgeToEdgeWindow()` 设置透明状态栏/导航栏，配合 `LAYOUT_STABLE | LAYOUT_FULLSCREEN | LAYOUT_HIDE_NAVIGATION`。
+   - `applySystemBarInsets()` 将系统栏 insets 应用到 `player_content`，确保内容正确避开系统栏。
+   - 主题设置 `enforceStatusBarContrast=false` 和 `enforceNavigationBarContrast=false`，阻止系统绘制不透明的栏背景。
+   - 此前“壁纸最上方有灰色区域”的根因不是壁纸图片，而是 Android 状态栏单独绘制了不透明/对比色背景，盖在了页面背景上。
+   - 修复方式是让壁纸真正延伸到状态栏后方，同时把状态栏高度作为间距补回 View 与 Compose 内容区（`player_content` 和 `WindowInsets.statusBars`），避免控件压到系统图标下。
 
 ### 文件地图
 
 ```
 app/
 ├─ src/main/java/com/example/videodecoder/
-│  ├─ MainActivity.java                 # Java 入口，JNI 调用，旧 UI 控制
+│  ├─ MainActivity.java                 # Java 入口，JNI 调用，edge-to-edge 窗口，状态同步
 │  ├─ LiquidControls.kt              # Compose 液态玻璃控制面板（Select/Decode/Play/Pause/倍速）
 │  ├─ LiquidSlider.kt                # 液态玻璃进度条
 │  ├─ DampedDragAnimation.kt         # 拖拽形变与释放动画
 │  ├─ LiquidGlassHelper.kt           # Java -> Compose 桥接层，状态同步
 │  ├─ InteractiveHighlight.kt          # 按压高光、拖拽形变逻辑
 │  ├─ DragGestureInspector.kt        # 手势解析工具
+│  ├─ Ripple.kt                       # 自定义玻璃涟漪效果
+│  ├─ UISensor.kt                     # 加速度计驱动光照角度（2° 阈值过滤）
 │  ├─ PlaybackInputPolicy.java
 │  ├─ PlaybackTimeFormatter.java
 │  └─ PlaybackUiPolicy.java
@@ -144,11 +163,12 @@ app/
 │  └─ activity_main.xml              # 主布局，包含 ComposeView 容器
 ├─ src/main/res/values/
 │  ├─ colors.xml                    # 全局配色（含 liquid_* 调色板）
-│  ├─ themes.xml                   # 主题（统一到 liquid 语言）
+│  ├─ themes.xml                   # 主题（edge-to-edge，transparent bars）
 │  └─ drawable/
+│     ├─ wallpaper_light.webp        # 浅色渐变壁纸背景
 │     ├─ bg_deadliner_surface.xml     # 液态渐变背景
 │     ├─ bg_deadliner_chip.xml       # 玻璃感 Chip 背景
-│     └─ bg_liquid_player_surface.xml # 深色播放器背景
+│     └─ bg_liquid_player_surface.xml # 深色播放器背景（旧版）
 └─ src/main/cpp/
     ├─ native-lib.cpp
     ├─ MediaInput.cpp/.h
@@ -452,13 +472,19 @@ flowchart LR
 当前首页 UI 已完成 Liquid Glass 风格改造，重点如下：
 
 - **四区域排版**：页面稳定分为顶部文本/状态区、视频区、进度条区、按钮控制区，避免顶部文本撑高后压到视频区域。
+- **Edge-to-Edge 全屏窗口**：透明状态栏/导航栏，配合系统栏 insets 处理；`enforceStatusBarContrast=false` 阻止系统绘制不透明栏背景。
+- **壁纸背景**：使用 AndroidLiquidGlass 的 `wallpaper_light.webp` 作为全屏页面背景。
+- **顶部灰条修复**：壁纸现在会绘制到状态栏背后，内容再通过系统栏 inset 下移，不再由系统状态栏填充单独的灰色主题色。
 - **顶部信息区**：顶部文本框也改为 Liquid Glass 面板，状态文案通过 `LiquidGlassHelper.setStatusText()` 与 native/Java 状态同步。
 - **进度条贴近视频**：进度条区域位于视频下方，按钮区紧跟进度条，形成连续播放器控制簇。
 - **统一透明玻璃按钮**：选择、解析、播放/暂停、倍速按钮共享同一玻璃 backdrop，取消突兀的蓝色/红色按钮配色。
+- **激活态蓝字**：选中按钮和倍速标签文字使用蓝色 `#0091FF`。
 - **卡片语言**：主要信息区统一为 24dp 圆角卡片，使用 `surfaceContainer*` 分层而不是重阴影。
 - **状态语义色**：引入四态色并做浅色/深色资源分离，避免在布局中硬编码颜色。
 - **状态联动**：`MainActivity` 会根据播放状态映射并联动更新 chip、卡片底色、解码按钮、播放/暂停/倍速/选择视频按钮，以及 SeekBar 强调色。
-- **动效节奏**：页面首屏采用 staggered `fade + slight slide` 入场；状态切换使用 180ms fade；状态文案（如“已选择视频”“正在解析视频”“解析结束”）采用统一 fade + text swap。
+- **动效节奏**：页面首屏采用 staggered `fade + slight slide` 入场；状态切换使用 180ms fade；状态文案（如”已选择视频””正在解析视频””解析结束”）采用统一 fade + text swap。
+- **视觉参数对齐**：滑块 40×24dp、轨道 6dp；倍速容器 64dp、指示器透明度跟随按压进度。
+- **自定义涟漪**：`glassRipple()` 降低透明度，更贴合液态玻璃质感。
 
 ### 状态映射
 
