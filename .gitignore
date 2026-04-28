@@ -21,3 +21,10 @@ Thumbs.db
 # Markdown: keep only README.md in remote repository
 /*.md
 !/README.md
+!/README.zh-CN.md
+
+# Local agent, IDE, and generated diagnostic files
+/.agents/skills/custom_skill/
+/.github/workflows/
+/.kotlin/errors/
+/.settings/

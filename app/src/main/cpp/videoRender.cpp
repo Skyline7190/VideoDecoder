@@ -1,6 +1,7 @@
 #include "videoRender.h"
 #include <android/log.h>
 #include <chrono>
+#include <cmath>
 
 #define LOG_TAG "VideoRender"
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -173,6 +174,38 @@ void Renderer::updateTextures(AVFrame* frame) {
     checkGLError("updateTextures");
 }
 
+void Renderer::applyAspectFillViewport(const AVFrame* frame) {
+    if (!frame || frame->width <= 0 || frame->height <= 0 || width <= 0 || height <= 0) {
+        glViewport(0, 0, width, height);
+        return;
+    }
+
+    double pixelAspect = 1.0;
+    if (frame->sample_aspect_ratio.num > 0 && frame->sample_aspect_ratio.den > 0) {
+        pixelAspect = static_cast<double>(frame->sample_aspect_ratio.num) /
+                      static_cast<double>(frame->sample_aspect_ratio.den);
+    }
+
+    const double videoAspect =
+            (static_cast<double>(frame->width) * pixelAspect) / static_cast<double>(frame->height);
+    const double surfaceAspect = static_cast<double>(width) / static_cast<double>(height);
+
+    int viewportWidth = width;
+    int viewportHeight = height;
+    if (surfaceAspect > videoAspect) {
+        viewportHeight = static_cast<int>(std::round(width / videoAspect));
+    } else {
+        viewportWidth = static_cast<int>(std::round(height * videoAspect));
+    }
+
+    if (viewportWidth <= 0) viewportWidth = width;
+    if (viewportHeight <= 0) viewportHeight = height;
+
+    const int viewportX = (width - viewportWidth) / 2;
+    const int viewportY = (height - viewportHeight) / 2;
+    glViewport(viewportX, viewportY, viewportWidth, viewportHeight);
+}
+
 void Renderer::renderFrame(AVFrame* frame) {
     if (contextLost) {
         LOGW("Context lost, skipping render");
@@ -187,8 +220,10 @@ void Renderer::renderFrame(AVFrame* frame) {
     }
     //LOGD("Rendering frame: %dx%d", frame->width, frame->height);
     // 清除屏幕
-    glClearColor(1.0, 0.0, 0.0, 1.0);
+    glViewport(0, 0, width, height);
+    glClearColor(0.0, 0.0, 0.0, 1.0);
     glClear(GL_COLOR_BUFFER_BIT);
+    applyAspectFillViewport(frame);
 
     // 使用程序
     glUseProgram(program);

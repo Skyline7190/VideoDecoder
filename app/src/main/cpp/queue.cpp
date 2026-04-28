@@ -19,10 +19,12 @@ void PacketQueue::push(AVPacket* packet) {
     if (!packet) return;
     std::unique_lock<std::mutex> lock(mutex);
     // 限制队列大小，防止 Demuxer 光速读取导致 OOM 爆内存
-    cond.wait(lock, [this]() {
-        return queue.size() < 100 || demuxFinished.load() || isStopRequested();
-    });
-    if (isStopRequested()) {
+    // Limit queue growth, but wake periodically so seek requests can interrupt a full queue.
+    while (queue.size() >= 100 && !demuxFinished.load() && !isStopRequested() &&
+           !(playbackState && playbackState->isSeeking.load())) {
+        cond.wait_for(lock, std::chrono::milliseconds(10));
+    }
+    if (isStopRequested() || (playbackState && playbackState->isSeeking.load())) {
         av_packet_free(&packet);
         return;
     }

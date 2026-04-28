@@ -24,6 +24,7 @@ private:
     bool createTextures();
     bool setupVertexData();
     void updateTextures(AVFrame* frame);
+    void applyAspectFillViewport(const AVFrame* frame);
     bool loadShader(GLuint shader, const char* source);
     bool checkProgramLinkStatus(GLuint program);
     void checkGLError(const char* operation);

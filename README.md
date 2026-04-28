@@ -1,43 +1,58 @@
 # VideoDecoder
 
-VideoDecoder 是一个基于 **Android + JNI + FFmpeg + OpenGL ES + AAudio** 的原生播放器实验项目。它的重点不是封装系统播放器，而是把解复用、音视频解码、音频输出、OpenGL 渲染和播放控制拆开，形成一条可观察、可调试、可继续演进的 native 播放链路。
+**English** | [中文](README.zh-CN.md)
+
+VideoDecoder is a native Android playback experiment built with **Android + JNI + FFmpeg + OpenGL ES + AAudio**. Instead of wrapping the system media player, it separates demuxing, audio/video decoding, audio output, OpenGL rendering, playback control, and UI interaction into an observable and debuggable native playback pipeline.
 
 ---
 
-## 核心能力
+## Multi-Agent Evolution System
 
-- 本地视频文件选择与播放
-- FFmpeg 解复用与软解码，支持音频和视频流
-- OpenGL ES 将 YUV 视频帧渲染到 `SurfaceView`
-- AAudio 低延迟音频输出
-- 播放、暂停、恢复、Seek、倍速播放
-- 倍速播放使用 FFmpeg `atempo` filter，实现变速不变调
-- 通过进度条轮询 native 播放进度
-- **Liquid Glass** 风格的现代化 UI 交互（基于 Jetpack Compose 与 AndroidLiquidGlass 库）
-- Material 3 卡片化 UI（24dp 圆角、语义化状态色、轻量动效）
+This project is evolved through a multi-agent, cross-domain full-stack workflow designed for mixed technology stacks. The system bridges low-level C++ cross-compilation, strict `arm64-v8a` native builds, multi-threaded `FFmpeg` packet/frame queues, `OpenGL / AAudio` clock-sensitive playback, and modern `Jetpack Compose` UI with dynamic shader lighting and Liquid Glass interaction.
+
+The workflow relies on long-chain reasoning across layers. A frontend agent analyzes open-source motion libraries, spatial math, spring damping, refraction, highlights, and gesture deformation. A cross-stack agent traces JNI state locks, native playback clocks, async queues, seek wakeups, EGL surfaces, and the rendering pipeline. When the input is an ambiguous perceptual issue such as "speed switching feels abrupt", "dragging stalls", "there is too much black area", or "the button does not feel like liquid glass", the system can trace from Compose `Spring` behavior and gesture state all the way down to native queues, Surface lifecycle, OpenGL viewport logic, and AAudio sync.
+
+This turns cross-environment code edits, NDK build-chain adaptation, Gradle validation, and UI feel iteration into a tight engineering loop, compressing work that would normally require repeated senior full-stack debugging into fast, minutes-level iterations.
 
 ---
 
-## 技术架构
+## Core Capabilities
 
-项目采用 **Java UI 层 + Native 媒体内核** 的结构。Java 负责界面、文件选择和用户交互；C++ 负责媒体处理、线程编排、同步和渲染。
+- Local video selection and playback.
+- FFmpeg demuxing and software decoding for audio and video streams.
+- OpenGL ES YUV frame rendering to Android Surface.
+- Visible playback surface migrated to `TextureView`, with `SurfaceTexture` buffer size synchronized to the UI window.
+- Low-latency audio output through AAudio.
+- Play, pause, resume, seek, and playback speed control.
+- Speed changes through FFmpeg `atempo`, preserving pitch while changing playback rate.
+- Native playback progress polling and seek through the progress bar.
+- Modern **Liquid Glass** interaction built with Jetpack Compose and AndroidLiquidGlass.
+- Four-zone player layout: top text/status area, video area, progress area, and button area.
+- Liquid Glass progress slider with drag deformation, release-to-seek, and stable drag-state cleanup.
+
+---
+
+## Architecture
+
+The project uses a **Java UI layer + Native media core** architecture. Java handles UI, file selection, and user interaction. C++ handles media processing, thread orchestration, synchronization, and rendering.
 
 ```mermaid
 flowchart TB
-    subgraph Java["Java UI 层"]
+    subgraph Java["Java UI Layer"]
         Activity["MainActivity"]
         SurfaceView["SurfaceView"]
-        Controls["播放 / 暂停 / Seek / 倍速 / 进度"]
+        TextureView["TextureView"]
+        Controls["Play / Pause / Seek / Speed / Progress"]
         PFD["ParcelFileDescriptor"]
     end
 
-    subgraph JNI["JNI 边界"]
+    subgraph JNI["JNI Boundary"]
         DecodeApi["decodeVideo(videoPath, outputPath)"]
         SurfaceApi["setSurface(surface)"]
         ControlApi["pause / resume / seek / speed / release"]
     end
 
-    subgraph Native["Native 媒体内核"]
+    subgraph Native["Native Media Core"]
         Session["PlaybackSession"]
         State["PlaybackState"]
         Window["NativeWindowHolder"]
@@ -59,6 +74,7 @@ flowchart TB
 
     Activity --> DecodeApi
     SurfaceView --> SurfaceApi
+    TextureView --> SurfaceApi
     Controls --> ControlApi
     PFD --> DecodeApi
 
@@ -82,80 +98,86 @@ flowchart TB
 
 ---
 
-## UI 现代化改造 (Liquid Glass)
+## Liquid Glass UI Modernization
 
-本项目已深度集成 [AndroidLiquidGlass](https://github.com/Kyant0/AndroidLiquidGlass) 库，实现 iOS/visionOS 风格的液态玻璃 UI。
+The project integrates the AndroidLiquidGlass style to create an iOS/visionOS-like liquid glass player interface.
 
-### 核心集成点
+### Integration Points
 
-1.  **混合布局架构**：
-   - `activity_main.xml` 保留传统 View 体系（Material Card + SurfaceView）。
-   - `ComposeView` 作为液态玻璃控制面板，悬浮在内容流中（替代了原本的 `action_card` 和 `speed_card`）。
+1. **Hybrid Layout Architecture**
+   - `activity_main.xml` keeps the required legacy View IDs so Java can reuse event, state, and JNI wiring.
+   - The video area uses `TextureView` for the native rendering Surface.
+   - `ComposeView` is a full-screen Liquid Glass overlay that draws the top information area, progress area, and button area.
+   - The visible layout is organized into four stable zones: top text/status, video, progress, and controls.
 
-2.  **Liquid Glass 交互**：
-   - `LiquidControls.kt`：基于 `rememberLayerBackdrop()` 和 `drawBackdrop` 实现液态按钮。
-   - `InteractiveHighlight.kt`：实现按压高光、拖拽尾迹和弹性形变（非线性位移 `tanh`、方向相关缩放 `atan2/cos/sin`）。
-   - `DragGestureInspector.kt`：提供流畅的手势解析。
+2. **Liquid Glass Interaction**
+   - `LiquidControls.kt`: Compose Liquid Glass panels and buttons based on `rememberLayerBackdrop()` and `drawBackdrop`.
+   - `LiquidSlider.kt`: Liquid Glass progress slider with direct drag tracking and release-to-seek.
+   - `DampedDragAnimation.kt`: drag deformation, press/release animation, and stable cleanup.
+   - `InteractiveHighlight.kt`: press highlights, drag trail, and elastic deformation using nonlinear displacement and direction-aware scaling.
+   - `DragGestureInspector.kt`: shared gesture parsing utilities.
 
-3.  **视觉统一**：
-   - **全局配色**：`colors.xml` 和 `themes.xml` 引入 `liquid_*` 调色板，统一背景、卡片、描边。
-   - **全页风格**：页面背景 (`bg_deadliner_surface.xml`)、Chip (`bg_deadliner_chip.xml`)、所有卡片和按钮 tint 统一到液态玻璃语言。
-   - **呼吸脉冲**：Active 按钮带有 `rememberInfiniteTransition` 驱动的微弱呼吸动效，增强“活着的玻璃”质感。
-   - **状态联动**：播放状态（PLAYING/PAUSED/IDLE/READY）精准映射到 `LiquidGlassHelper` 的 `isPlayingState` 和 `selectedSpeedState`，动态高亮当前激活按钮。
+3. **Visual Consistency**
+   - Top status panel, progress panel, and button panel share the same Liquid Glass visual language.
+   - Select, decode, play/pause, and speed controls use transparent glass styling instead of strong red/blue tint blocks.
+   - The background is a dark player surface to keep white text and glass controls readable.
+   - Playback state is synchronized through `LiquidGlassHelper` and reflected in button activity and status text.
 
-### 文件地图
+### File Map
 
-```
+```text
 app/
 ├─ src/main/java/com/example/videodecoder/
-│  ├─ MainActivity.java                 # Java 入口，JNI 调用，旧 UI 控制
-│  ├─ LiquidControls.kt              # Compose 液态玻璃控制面板（Select/Decode/Play/Pause/倍速）
-│  ├─ LiquidGlassHelper.kt           # Java -> Compose 桥接层，状态同步
-│  ├─ InteractiveHighlight.kt          # 按压高光、拖拽形变逻辑
-│  ├─ DragGestureInspector.kt        # 手势解析工具
+│  ├─ MainActivity.java              # Java entry, TextureView, JNI calls, state sync
+│  ├─ LiquidControls.kt              # Compose Liquid Glass panels and buttons
+│  ├─ LiquidSlider.kt                # Liquid Glass progress slider
+│  ├─ DampedDragAnimation.kt         # Drag deformation and release animation
+│  ├─ LiquidGlassHelper.kt           # Java -> Compose state bridge
+│  ├─ InteractiveHighlight.kt        # Press highlight and elastic deformation
+│  ├─ DragGestureInspector.kt        # Gesture parser
 │  ├─ PlaybackInputPolicy.java
 │  ├─ PlaybackTimeFormatter.java
 │  └─ PlaybackUiPolicy.java
 ├─ src/main/res/layout/
-│  └─ activity_main.xml              # 主布局，包含 ComposeView 容器
-├─ src/main/res/values/
-│  ├─ colors.xml                    # 全局配色（含 liquid_* 调色板）
-│  ├─ themes.xml                   # 主题（统一到 liquid 语言）
-│  └─ drawable/
-│     ├─ bg_deadliner_surface.xml     # 液态渐变背景
-│     └─ bg_deadliner_chip.xml       # 玻璃感 Chip 背景
+│  └─ activity_main.xml              # Four-zone layout skeleton and ComposeView container
+├─ src/main/res/drawable/
+│  ├─ bg_deadliner_surface.xml
+│  ├─ bg_deadliner_chip.xml
+│  └─ bg_liquid_player_surface.xml   # Dark player background
 └─ src/main/cpp/
-    ├─ native-lib.cpp
-    ├─ MediaInput.cpp/.h
-    ├─ NativeEgl.cpp/.h
-    ├─ NativeWindowHolder.cpp/.h
-    ├─ ScopeExit.h
-    ├─ JniStringChars.h
-    ├─ Demuxer.cpp/.h
-    ├─ Decoder.cpp/.h
-    ├─ queue.cpp/.h
-    ├─ videoRender.cpp/.h
-    └─ AudioRender.cpp/.h
+   ├─ native-lib.cpp
+   ├─ MediaInput.cpp/.h
+   ├─ NativeEgl.cpp/.h
+   ├─ NativeWindowHolder.cpp/.h
+   ├─ ScopeExit.h
+   ├─ JniStringChars.h
+   ├─ Demuxer.cpp/.h
+   ├─ Decoder.cpp/.h
+   ├─ queue.cpp/.h
+   ├─ videoRender.cpp/.h
+   └─ AudioRender.cpp/.h
 ```
 
 ---
 
-## 构建要求
+## Build Requirements
 
-- **Android Studio** 或命令行 Gradle
-- **Android SDK 36** (compileSdk 36)
-- **Kotlin 2.3.10**
-- **Android NDK + CMake**
-- **Java 11**
-- **Gradle Wrapper** 使用仓库内 `gradlew` / `gradlew.bat`
+- Android Studio or command-line Gradle.
+- Android SDK 36.
+- Kotlin 2.3.10.
+- Android NDK + CMake.
+- Java 11.
+- Gradle Wrapper from this repository: `gradlew` / `gradlew.bat`.
 
 ### Windows
+
 ```powershell
 .\gradlew.bat clean
 .\gradlew.bat assembleDebug
 ```
 
 ### Unix/macOS
+
 ```bash
 ./gradlew clean
 ./gradlew assembleDebug
@@ -163,28 +185,29 @@ app/
 
 ---
 
-## 平台限制
+## Platform Limitation
 
-项目当前仅支持 **`arm64-v8a`**：
-- `app/build.gradle` 中固定了 `abiFilters "arm64-v8a"`。
-- FFmpeg 预编译库位于 `app/src/main/jniLibs/arm64-v8a/libffmpeg.so`。
-- **不要在 x86/x86_64 模拟器上测试**，运行时会找不到或无法加载 native FFmpeg 库。
-- 请使用 arm64 真机或兼容的 arm64 环境验证播放。
+The project currently supports **`arm64-v8a` only**:
+
+- `app/build.gradle` fixes `abiFilters "arm64-v8a"`.
+- The prebuilt FFmpeg library is located at `app/src/main/jniLibs/arm64-v8a/libffmpeg.so`.
+- Do **not** test on x86/x86_64 emulators, because the native FFmpeg library will not be found or loaded.
+- Use an arm64 device or compatible arm64 environment for playback validation.
 
 ---
 
-## 播放线程模型
+## Playback Thread Model
 
-运行播放时会启动四条主要 native 线程：
+Playback starts four major native threads:
 
-1. Demux 线程：调用 `av_read_frame` 读取封装包，按 stream index 分发到音频/视频 `PacketQueue`。
-2. Video Decode 线程：从视频队列取包解码，使用 `sws_scale` 转为紧密 `YUV420P`，按需写入调试 YUV 文件并推入 `FrameQueue`。
-3. Audio Decode 线程：从音频队列取包解码，使用 `Swr` 转为 S16，再按播放速度进入 `atempo` 滤镜链，最后写入 AAudio 队列。
-4. Render 线程：从 `FrameQueue` 取视频帧，根据音频时钟节奏控制渲染并执行 `eglSwapBuffers`。
+1. **Demux thread**: reads packets through `av_read_frame` and dispatches them to audio/video `PacketQueue`.
+2. **Video decode thread**: decodes video packets, converts frames to tightly packed `YUV420P` with `sws_scale`, and pushes frames into `FrameQueue`.
+3. **Audio decode thread**: decodes audio packets, resamples to S16 with `Swr`, applies `atempo` for speed control, and writes to AAudio.
+4. **Render thread**: reads frames from `FrameQueue`, synchronizes against the audio clock, uploads YUV textures, and calls `eglSwapBuffers`.
 
 ```mermaid
 flowchart LR
-    Input["SAF Uri / fd"] --> DemuxThread["Demux 线程"]
+    Input["SAF Uri / fd"] --> DemuxThread["Demux Thread"]
 
     subgraph Session["PlaybackSession"]
         VideoPackets["video PacketQueue"]
@@ -196,34 +219,34 @@ flowchart LR
     DemuxThread --> VideoPackets
     DemuxThread --> AudioPackets
 
-    VideoPackets --> VideoThread["Video Decode 线程"]
-    VideoThread --> Convert["转换为紧密 YUV420P"]
+    VideoPackets --> VideoThread["Video Decode Thread"]
+    VideoThread --> Convert["Convert to tight YUV420P"]
     Convert --> Frames
-    Convert -. "调试开关开启时" .-> YuvFile["output.yuv"]
+    Convert -. "debug export enabled" .-> YuvFile["output.yuv"]
 
-    AudioPackets --> AudioThread["Audio Decode 线程"]
-    AudioThread --> Resample["S16 重采样"]
-    Resample --> Tempo["倍速 atempo"]
+    AudioPackets --> AudioThread["Audio Decode Thread"]
+    AudioThread --> Resample["S16 resample"]
+    Resample --> Tempo["speed via atempo"]
     Tempo --> AudioOut
 
-    Frames --> RenderThread["Render 线程"]
-    RenderThread --> Sync["根据音频时钟等待"]
-    Sync --> GLES["YUV 纹理上传 + shader"]
-    GLES --> Surface["SurfaceView"]
+    Frames --> RenderThread["Render Thread"]
+    RenderThread --> Sync["wait by audio clock"]
+    Sync --> GLES["YUV texture upload + shader"]
+    GLES --> Surface["TextureView / Surface"]
 
-    AudioOut --> Speaker["设备音频输出"]
+    AudioOut --> Speaker["Device audio output"]
 ```
 
-`PacketQueue` 和 `FrameQueue` 都带背压控制，避免 demux 或 decode 过快造成内存无限增长。Seek 或停止时会清空队列并唤醒等待线程，保证线程可以退出或恢复。
+`PacketQueue` and `FrameQueue` both apply backpressure to prevent demux/decode from growing memory without bounds. Seek and stop paths clear queues and wake waiting threads so playback can recover or exit.
 
 ---
 
-## 音画同步
+## Audio/Video Synchronization
 
-当前同步策略以音频播放进度作为主参考。视频渲染时根据音频已提交 PTS 和 AAudio/软件队列中尚未播放的延迟，估算当前真实音频位置：
+The current sync strategy uses audio playback progress as the main reference. The render thread estimates the real audio position by subtracting the pending AAudio/software queue duration from the latest submitted audio PTS:
 
 ```cpp
-exact_audio_pts = g_audioClock - pending_audio_duration
+exact_audio_pts = audioClock - pending_audio_duration
 diff = video_pts - exact_audio_pts
 ```
 
@@ -233,186 +256,135 @@ sequenceDiagram
     participant R as AudioRenderer
     participant V as Render Thread
     participant C as Clocks
-    
+
     A->>R: writeData(pcm, samples)
-    A->>C: 更新 g_audioClock
-    V->>C: 读取 g_videoClock
+    A->>C: update audioClock
+    V->>C: read videoClock
     V->>R: getPendingAudioDurationUs()
-    R-->>V: 尚未播放的音频延迟
-    V->>V: exact_audio_pts = g_audioClock - pending_delay
+    R-->>V: pending audio duration
+    V->>V: exact_audio_pts = audioClock - pending
     V->>V: diff = video_pts - exact_audio_pts
-    alt 视频快于音频
-        V->>V: 按倍速缩放 sleep
-    else 视频不快于音频
-        V->>V: 立即渲染追赶
+    alt video is ahead of audio
+        V->>V: sleep scaled by playback speed
+    else video is not ahead
+        V->>V: render immediately to catch up
     end
 ```
 
-- `diff > 0`：视频快于音频，Render 线程短暂 sleep 等待。
-- `diff <= 0`：视频不等待，继续渲染追赶音频。
-
-倍速播放时，视频等待时长会按 `g_playbackSpeed` 缩放；音频侧通过 `atempo` 处理时间拉伸。
-
----
-
-## 音画同步
-
-当前同步策略以音频播放进度作为主参考。视频渲染时根据音频已提交 PTS 和 AAudio/软件队列中尚未播放的延迟，估算当前真实音频位置：
-
-```cpp
-exact_audio_pts = g_audioClock - pending_audio_duration
-diff = video_pts - exact_audio_pts
-```
-
-```mermaid
-sequenceDiagram
-    participant A as Audio Decoder
-    participant R as AudioRenderer
-    participant V as Render Thread
-    participant C as Clocks
-    
-    A->>R: writeData(pcm, samples)
-    A->>C: 更新 g_audioClock
-    V->>C: 读取 g_videoClock
-    V->>R: getPendingAudioDurationUs()
-    R-->>V: 尚未播放的音频延迟
-    V->>V: exact_audio_pts = g_audioClock - pending_delay
-    V->>V: diff = video_pts - exact_audio_pts
-    alt 视频快于音频
-        V->>V: 按倍速缩放 sleep
-    else 视频不快于音频
-        V->>V: 立即渲染追赶
-    end
-```
-
-- `diff > 0`：视频快于音频，Render 线程短暂 sleep 等待。
-- `diff <= 0`：视频不等待，继续渲染追赶音频。
-
-倍速播放时，视频等待时长会按 `g_playbackSpeed` 缩放；音频侧通过 `atempo` 处理时间拉伸。
+- `diff > 0`: video is ahead, so the render thread sleeps briefly.
+- `diff <= 0`: video renders immediately and catches up to audio.
+- During speed playback, video wait duration is scaled by `playbackSpeed`, while audio timing is adjusted through `atempo`.
 
 ---
 
-## Seek 与播放控制
+## Seek and Playback Control
 
-Seek 使用两阶段握手机制：
+Seek uses a two-stage handshake:
 
-1. Java 调用 `seekToPosition(ms)`。
-2. Native 设置 `g_isSeeking=true` 和目标时间。
-3. Demux 线程执行 `avformat_seek_file`，失败时回退到 `av_seek_frame`。
-4. Demux 设置 `g_seekApplied=true`。
-5. Audio/Video 链路清空旧队列、flush 解码器、重置时钟后恢复播放。
+1. Java calls `seekToPosition(ms)`.
+2. Native stores the target time and sets `isSeeking = true`.
+3. Demuxer runs `avformat_seek_file`, falling back to `av_seek_frame` if needed.
+4. Old packet/frame queues are cleared, decoders are flushed, audio buffers are rebuilt, and clocks are reset.
+5. Seek state is cleared and playback resumes.
 
 ```mermaid
 stateDiagram-v2
     [*] --> Playing
     Playing --> Seeking: seekToPosition(ms)
-    Seeking --> DemuxSeek: Demuxer 执行 seek
-    DemuxSeek --> FlushQueues: 清空 PacketQueue / FrameQueue
+    Seeking --> DemuxSeek: Demuxer executes seek
+    DemuxSeek --> FlushQueues: clear PacketQueue / FrameQueue
     FlushQueues --> FlushDecoders: avcodec_flush_buffers
-    FlushDecoders --> ResetClocks: 重置音视频时钟
+    FlushDecoders --> ResetClocks: reset audio/video clocks
     ResetClocks --> Playing
 
     Playing --> Paused: pauseDecoding()
     Paused --> Playing: resumeDecoding()
 
-    Playing --> Stopping: nativeReleaseAudio() / Surface 销毁
-    Paused --> Stopping: nativeReleaseAudio() / Surface 销毁
-    Seeking --> Stopping: 停止请求
-    Stopping --> JoinThreads: 唤醒队列并终止 FrameQueue
-    JoinThreads --> ReleaseSession: join 后释放 AudioRenderer / EGL / AVIO
+    Playing --> Stopping: nativeReleaseAudio() / Surface destroyed
+    Paused --> Stopping: nativeReleaseAudio() / Surface destroyed
+    Seeking --> Stopping: stop requested
+    Stopping --> JoinThreads: wake queues and terminate FrameQueue
+    JoinThreads --> ReleaseSession: release AudioRenderer / EGL / AVIO after join
     ReleaseSession --> [*]
 ```
 
-暂停/恢复通过原子状态控制，避免 UI 线程等待 native 阻塞操作。AAudio callback 在暂停时输出静音。
+`PacketQueue::push()` now wakes periodically while full and checks `isSeeking`, allowing seek requests to interrupt a full queue instead of waiting for another user interaction.
 
 ---
 
-## Native 资源所有权
+## Native Resource Ownership
 
 ```mermaid
 flowchart TB
-    DecodeCall["decodeVideo 调用"] --> LocalSession["栈上 PlaybackSession"]
+    DecodeCall["decodeVideo call"] --> LocalSession["stack PlaybackSession"]
     DecodeCall --> Input["MediaInput"]
     Input --> InputResource["AVFormatContext / AVIOContext / fd"]
     LocalSession --> State["shared_ptr<PlaybackState>"]
     LocalSession --> Queues["PacketQueue / FrameQueue"]
     LocalSession --> AudioPtr["unique_ptr<AudioRenderer>"]
-    State --> DemuxerState["Demuxer / Decoder / PacketQueue 显式读取状态"]
+    State --> DemuxerState["Demuxer / Decoder / PacketQueue read state explicitly"]
 
-    SurfaceCall["setSurface 调用"] --> WindowHolder["NativeWindowHolder"]
+    SurfaceCall["setSurface call"] --> WindowHolder["NativeWindowHolder"]
     WindowHolder --> SharedWindow["shared_ptr<ANativeWindow>"]
-    SharedWindow --> RenderSnapshot["Render 线程复制窗口快照"]
+    SharedWindow --> RenderSnapshot["Render thread copies window snapshot"]
     RenderSnapshot --> NativeEgl["NativeEgl"]
     NativeEgl --> EGLSurface["EGLSurface / EGLContext"]
 
-    Stop["停止请求"] --> Wake["notifyAll / FrameQueue terminate"]
+    Stop["stop requested"] --> Wake["notifyAll / FrameQueue terminate"]
     Wake --> Join["join demux / decode / audio / render"]
-    Join --> Cleanup["ScopeExit 释放 session、EGL、AVCodec、AVIO、fd"]
+    Join --> Cleanup["ScopeExit releases session, EGL, AVCodec, AVIO, fd"]
 ```
 
 ---
 
-## 最近稳定性优化
+## Video Window Adaptation
 
-近期已修复几类关键 native 风险：
+The video window now prioritizes filling the player area while preserving the video aspect ratio.
 
-- Render 线程初始化失败时会设置停止标志、唤醒 packet 队列并终止 `FrameQueue`，避免 Video Decode 线程卡死在 `FrameQueue::push()`。
-- `g_audioRenderer` 的释放顺序调整为等待 Render 线程结束之后，避免 Render 线程读取已释放对象。
-- `FrameQueue::clear()` 清空后会通知等待线程，避免 seek/清队列后生产者继续阻塞。
-- Video Decode 不再假设源帧一定是紧密 `YUV420P`；现在统一用 `sws_scale` 转换后再写 YUV 和送渲染。
-- OpenGL 上传 U/V 平面时按 `(width + 1) / 2` 和 `(height + 1) / 2` 计算，兼容奇数宽高。
-- YUV 调试导出改为按需启用，默认播放路径不再持续写 `output.yuv`，降低长视频播放时的 I/O 和存储压力。
-- `SurfaceView` 销毁时会请求 native 会话停止，并在播放线程结束后释放 native window，避免旧 Surface 被继续使用。
-- 视频输入不再完整复制到 cache；Java 层通过 `ParcelFileDescriptor` 打开 SAF Uri，并把 `fd:<number>` 交给 native 自定义 AVIO，避免大视频启动前的整文件复制成本。
-- Native 播放队列和 `AudioRenderer` 已收敛进 `PlaybackSession`，移除了全局 `g_audioRenderer` 和 `g_sessionActive`，降低跨会话裸指针和释放顺序风险。
-- `ANativeWindow` 已改为带释放器的共享句柄，Render 线程使用窗口快照，避免 Surface 生命周期变化时继续读写悬空全局指针。
-- Surface 到 `ANativeWindow` 的转换、锁保护、引用快照和释放已抽到 `NativeWindowHolder`，`native-lib.cpp` 不再直接维护 window 全局锁和 deleter。
-- 播放控制、Seek、时钟、进度和倍速状态已收敛进 `PlaybackState`，`Demuxer`、`Decoder`、`PacketQueue`、`AudioRenderer` 不再通过 `extern` 读取全局播放状态。
-- `decodeVideo()` 的 JNI 字符串、AVIO/fd、codec context 和 YUV 文件清理改为 `ScopeExit` 管理，减少初始化失败或早退分支漏释放资源的风险。
-- JNI 字符串获取与释放已封装为 `JniStringChars`，避免 `decodeVideo()` 手动维护 `ReleaseStringUTFChars` 分支。
-- 清理未使用的单队列 `Demuxer::demux()` 重载和 `Decoder` 内部冗余 `FrameQueue` 成员，缩小 native 模块维护面。
-- EGL display、surface、context 初始化与清理已抽到 `NativeEgl`，进一步减薄 `native-lib.cpp` 的平台渲染细节。
+```mermaid
+flowchart LR
+    Texture["TextureView size"] --> Buffer["SurfaceTexture.setDefaultBufferSize"]
+    Buffer --> Surface["Surface"]
+    Surface --> NativeWindow["ANativeWindow"]
+    NativeWindow --> Geometry["ANativeWindow_setBuffersGeometry"]
+    Geometry --> EGL["EGLSurface"]
+    EGL --> Renderer["Renderer.init(width, height)"]
+    Frame["AVFrame + sample_aspect_ratio"] --> Viewport["AspectFill viewport"]
+    Renderer --> Viewport
+    Viewport --> Stage["Fill video_stage; crop edges if needed"]
+```
 
 ---
 
-## UI 设计与交互（基于 Liquid Glass）
+## Recent Stability Improvements
 
-当前首页 UI 已完成 Liquid Glass 风格改造，重点如下：
-
-- **卡片语言**：主要信息区统一为 24dp 圆角卡片，使用 `surfaceContainer*` 分层而不是重阴影。
-- **状态语义色**：引入四态色并做浅色/深色资源分离，避免在布局中硬编码颜色。
-- **状态联动**：`MainActivity` 会根据播放状态映射并联动更新 chip、卡片底色、解码按钮、播放/暂停/倍速/选择视频按钮，以及 SeekBar 强调色。
-- **动效节奏**：页面首屏采用 staggered `fade + slight slide` 入场；状态切换使用 180ms fade；状态文案（如“已选择视频”“正在解析视频”“解析结束”）采用统一 fade + text swap。
-
-### 状态映射
-
-- `PLAYING -> UNDERGO`
-- `PAUSED -> NEAR`
-- `IDLE -> PASSED`
-- `READY -> COMPLETED`
-
-### 状态色资源
-
-- 日间：`app/src/main/res/values/colors.xml`
-- 夜间：`app/src/main/res/values-night/colors.xml`
-
-已定义四组 token（每组含 chip、card、button 前景/背景）：
-
-- `state_undergo_*`
-- `state_near_*`
-- `state_passed_*`
-- `state_completed_*`
-
-### Liquid Glass 统一调色
-
-- **容器背景**：`liquid_surface_start/mid/end` 冷色流动渐变。
-- **卡片**：`liquid_card_bg`, `liquid_card_bg_strong`, `liquid_card_stroke`, `liquid_card_stroke_subtle`。
-- **按钮与交互**：`LiquidButton` 使用 `tint` 和 `surfaceColor` 结合 `Highlight`, `Shadow`, `InnerShadow` 形成液态玻璃质感。
-- **呼吸动效**：Active 按钮带有 `rememberInfiniteTransition` 驱动的微弱正弦波呼吸脉冲（`sin(phase)`），振幅仅为 `1.0 -> 1.014`。
+- Render initialization failures set stop flags, wake packet queues, and terminate `FrameQueue`.
+- `AudioRenderer` ownership is scoped inside `PlaybackSession`, avoiding cross-session raw pointer risks.
+- `FrameQueue::clear()` notifies waiting threads after clearing.
+- Video decode no longer assumes source frames are tightly packed `YUV420P`; frames are converted through `sws_scale`.
+- U/V planes are uploaded with `(width + 1) / 2` and `(height + 1) / 2`, supporting odd frame sizes.
+- Debug YUV export is opt-in to reduce I/O and storage pressure.
+- Native windows are held through shared handles in `NativeWindowHolder`; render threads use snapshots to avoid stale global window access.
+- EGL display, surface, and context setup/cleanup are extracted into `NativeEgl`.
+- Visible rendering moved to `TextureView`, with SurfaceTexture buffer sizing kept in sync.
+- OpenGL viewport uses `AspectFill / CenterCrop` to reduce black borders.
+- Liquid slider drag now snaps while dragging and releases deterministically.
+- `PacketQueue::push()` periodically checks seek state while blocked by queue backpressure.
 
 ---
 
-## 构建验证
+## UI Design and Interaction
+
+- **Four-zone layout**: top text/status, video, progress, and button control areas.
+- **Top information panel**: Liquid Glass surface synchronized through `LiquidGlassHelper.setStatusText()`.
+- **Progress placement**: progress stays close to the video area; buttons stay close to progress.
+- **Unified transparent glass controls**: select, decode, play/pause, and speed controls share the same backdrop language.
+- **State linkage**: `MainActivity` maps playback state to chips, button activity, progress, and Compose state.
+- **Motion rhythm**: entrance and state transitions use subtle fade/slide animation; active buttons use lightweight breathing motion.
+
+---
+
+## Build Validation
 
 ```powershell
 .\gradlew.bat assembleDebug
@@ -421,7 +393,7 @@ flowchart TB
 
 ---
 
-## JNI 接口
+## JNI API
 
 - `decodeVideo(String videoPath, String outputPath)`
 - `setSurface(Surface surface)`
@@ -435,19 +407,18 @@ flowchart TB
 
 ---
 
-## 已知限制与后续方向
+## Known Limitations and Future Work
 
-- 视频输入当前通过 native 自定义 AVIO 直接读取已授权 fd。少数内容提供方如果返回不可 seek 的 fd，Seek 能力可能受限。
-- YUV 导出当前保留为 native 调试能力，默认 UI 播放路径关闭；后续可补一个显式调试开关。
-- 当前主要验证方式是构建、单元测试和 arm64 设备手动播放；native 同步链路仍需要更多端到端场景测试。
-- `native-lib.cpp` 仍承担 JNI、线程编排、音画同步和资源释放等多重职责；后续可继续拆分为更独立的 session/controller 模块。
-- native 同步链路仍需要更多设备级回归测试，尤其是连续 seek、倍速切换、Surface 销毁重建和长视频播放。
+- Video input uses native custom AVIO over an authorized file descriptor. Seek may be limited if a content provider returns a non-seekable fd.
+- YUV export remains as a native debug capability and is disabled by default in normal UI playback.
+- End-to-end testing should focus on continuous seek, speed switching, Surface destruction/recreation, and long video playback on arm64 devices.
+- `native-lib.cpp` still carries JNI, thread orchestration, synchronization, and resource cleanup responsibilities; it can be further split into dedicated session/controller modules.
 
 ---
 
-## 致谢
+## Acknowledgements
 
-- **FFmpeg**：行业标准的音视频处理瑞士军刀。
-- **Android NDK**：提供 native 层与 Android 系统的桥梁。
-- **AndroidLiquidGlass**：提供令人惊叹的液态玻璃 UI 效果。
-- **Jetpack Compose**：现代声明式 UI 工具包。
+- **FFmpeg**
+- **Android NDK**
+- **AndroidLiquidGlass**
+- **Jetpack Compose**

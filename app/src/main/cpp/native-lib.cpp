@@ -542,6 +542,15 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
             return;
         }
 
+        int width = ANativeWindow_getWidth(renderWindow.get());
+        int height = ANativeWindow_getHeight(renderWindow.get());
+        if (width <= 0 || height <= 0) {
+            eglTerminate(display);
+            abortRender("RenderThread: NativeWindow size is invalid");
+            return;
+        }
+        ANativeWindow_setBuffersGeometry(renderWindow.get(), width, height, WINDOW_FORMAT_RGBA_8888);
+
         EGLSurface surface = createEGLSurface(display, renderWindow.get());
         if (surface == EGL_NO_SURFACE) {
             eglTerminate(display);
@@ -558,10 +567,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         }
 
         // 3. 设置窗口缓冲几何
-        int width = ANativeWindow_getWidth(renderWindow.get());
-        int height = ANativeWindow_getHeight(renderWindow.get());
-        ANativeWindow_setBuffersGeometry(renderWindow.get(), width, height, WINDOW_FORMAT_RGBA_8888);
-
         // 4. 初始化渲染器
         Renderer renderer;
         if (!renderer.init(width, height)) {

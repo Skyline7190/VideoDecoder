@@ -5,6 +5,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import android.content.Intent;
 import android.content.res.ColorStateList;
+import android.graphics.SurfaceTexture;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -12,9 +13,9 @@ import android.os.Looper;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
+import android.view.TextureView;
 import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -59,6 +60,7 @@ public class MainActivity extends AppCompatActivity {
     private boolean isSeeking = false;
     private volatile boolean isSurfaceReady = false;
     private volatile boolean isDestroyed = false;
+    private Surface renderSurface;
     private boolean hasUiStateApplied = false;
     private final AccelerateDecelerateInterpolator entranceInterpolator =
             new AccelerateDecelerateInterpolator();
@@ -159,45 +161,20 @@ public class MainActivity extends AppCompatActivity {
         speed3Button.setOnClickListener(v -> {
             applyPlaybackSpeed(3.0f, "播放速度设置为3倍");
         });
-        //------------分割线------------//
-        // 获取 SurfaceView
-        SurfaceView surfaceView = findViewById(R.id.surface_view);
-
-        // 设置 SurfaceHolder 的回调
-        if (surfaceView != null) {
-            surfaceView.getHolder().addCallback(new SurfaceHolder.Callback() {
-                @Override
-                public void surfaceCreated(SurfaceHolder holder) {
-                    // 将 Surface 传递给 native 层
-                    setSurface(holder.getSurface());
-                    isSurfaceReady = true;
-                }
-
-                @Override
-                public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {}
-
-                @Override
-                public void surfaceDestroyed(SurfaceHolder holder) {
-                    isSurfaceReady = false;
-                    if (isDecodeRunning()) {
-                        nativeReleaseAudio();
-                    } else {
-                        setSurface(null);
-                    }
-                }
-            });
-        } else {
-            // 如果 surfaceView 为 null，输出错误信息
-            Toast.makeText(this, "SurfaceView 未找到", Toast.LENGTH_SHORT).show();
-        }
-
-        //------------分割线------------//
+        configureVideoStage();
+        configureVideoSurface();
 
 
 
 
 
         tv = findViewById(R.id.sample_text);
+        if (headerCard != null) {
+            headerCard.setVisibility(View.INVISIBLE);
+        }
+        if (previewStatusChip != null) {
+            previewStatusChip.setVisibility(View.INVISIBLE);
+        }
         selectVideoButton = findViewById(R.id.select_video_button);
         decodeVideoButton = findViewById(R.id.decode_video_button);
         decodeButton = findViewById(R.id.decode_video_button);
@@ -229,7 +206,9 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        tv.setText(stringFromJNI());
+        String initialStatus = stringFromJNI();
+        tv.setText(initialStatus);
+        LiquidGlassHelper.INSTANCE.setStatusText(initialStatus);
         // 监听按钮点击事件
         selectVideoButton.setOnClickListener(v -> pickVideo());
 
@@ -317,12 +296,113 @@ public class MainActivity extends AppCompatActivity {
                     else if (speed == 2.0f) speed2Button.performClick();
                     else if (speed == 3.0f) speed3Button.performClick();
                 }
+
+                @Override
+                public void onSeekTo(int positionMs) {
+                    if (isDecodeRunning()) {
+                        seekToPosition(positionMs);
+                        updateProgress(positionMs, Math.max(getDurationMs(), positionMs));
+                    }
+                }
             });
         }
         // ------------------------------------------------------------------
 
     }
     // 新增native方法声明
+
+    private void configureVideoStage() {
+        View videoStage = findViewById(R.id.video_stage);
+        if (videoStage == null) {
+            return;
+        }
+
+        videoStage.post(() -> {
+            int stageWidth = videoStage.getWidth();
+            if (stageWidth <= 0) {
+                return;
+            }
+
+            int stageHeight = Math.round(stageWidth * 9f / 16f);
+            ViewGroup.LayoutParams layoutParams = videoStage.getLayoutParams();
+            if (layoutParams != null && layoutParams.height != stageHeight) {
+                layoutParams.height = stageHeight;
+                videoStage.setLayoutParams(layoutParams);
+            }
+        });
+    }
+
+    private void configureVideoSurface() {
+        TextureView textureView = findViewById(R.id.surface_view);
+        if (textureView == null) {
+            Toast.makeText(this, "TextureView 未找到", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        textureView.setOpaque(true);
+        textureView.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+            @Override
+            public void onSurfaceTextureAvailable(SurfaceTexture surfaceTexture, int width, int height) {
+                if (width > 0 && height > 0) {
+                    surfaceTexture.setDefaultBufferSize(width, height);
+                }
+                attachRenderSurface(surfaceTexture);
+            }
+
+            @Override
+            public void onSurfaceTextureSizeChanged(SurfaceTexture surfaceTexture, int width, int height) {
+                if (width > 0 && height > 0) {
+                    surfaceTexture.setDefaultBufferSize(width, height);
+                    attachRenderSurface(surfaceTexture);
+                }
+            }
+
+            @Override
+            public boolean onSurfaceTextureDestroyed(SurfaceTexture surfaceTexture) {
+                isSurfaceReady = false;
+                if (isDecodeRunning()) {
+                    nativeReleaseAudio();
+                }
+                setSurface(null);
+                releaseRenderSurface();
+                return true;
+            }
+
+            @Override
+            public void onSurfaceTextureUpdated(SurfaceTexture surfaceTexture) {}
+        });
+
+        if (textureView.isAvailable()) {
+            SurfaceTexture surfaceTexture = textureView.getSurfaceTexture();
+            if (surfaceTexture != null) {
+                int width = textureView.getWidth();
+                int height = textureView.getHeight();
+                if (width > 0 && height > 0) {
+                    surfaceTexture.setDefaultBufferSize(width, height);
+                }
+                attachRenderSurface(surfaceTexture);
+            }
+        }
+    }
+
+    private void attachRenderSurface(SurfaceTexture surfaceTexture) {
+        if (surfaceTexture == null) {
+            return;
+        }
+
+        releaseRenderSurface();
+        renderSurface = new Surface(surfaceTexture);
+        setSurface(renderSurface);
+        isSurfaceReady = true;
+    }
+
+    private void releaseRenderSurface() {
+        if (renderSurface != null) {
+            setSurface(null);
+            renderSurface.release();
+            renderSurface = null;
+        }
+    }
 
 
     // 新增方法：更新进度条和时间显示
@@ -332,6 +412,7 @@ public class MainActivity extends AppCompatActivity {
                 seekBar.setMax(duration);
                 seekBar.setProgress(currentPosition);
                 updateTimeText(currentPosition, duration);
+                LiquidGlassHelper.INSTANCE.setProgress(currentPosition, duration);
             }
         });
     }
@@ -452,12 +533,13 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void setStatusTextWithFade(String text) {
-        if (tv == null) {
-            return;
-        }
-
         if (text == null) {
             text = "";
+        }
+        LiquidGlassHelper.INSTANCE.setStatusText(text);
+
+        if (tv == null) {
+            return;
         }
 
         tv.animate().cancel();
@@ -483,6 +565,7 @@ public class MainActivity extends AppCompatActivity {
             
             // 同步给Liquid Glass UI
             LiquidGlassHelper.INSTANCE.setPlaying(state == PlaybackUiPolicy.PlaybackUiState.PLAYING);
+            LiquidGlassHelper.INSTANCE.setPlaybackStateLabel(state.name());
 
             PlaybackUiPolicy.ControlState controlState = PlaybackUiPolicy.resolve(state);
             updateUiStateColorScheme(state);
@@ -528,7 +611,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if (headerCard != null) {
-            headerCard.setCardBackgroundColor(resolveColor(scheme.cardBackgroundColorRes));
+            headerCard.setCardBackgroundColor(0x33FFFFFF);
         }
 
         if (actionCard != null) {
@@ -667,6 +750,7 @@ public class MainActivity extends AppCompatActivity {
         runOnUiThread(() -> {
             if (result != null && !result.isEmpty()) {
                 tv.append("\n" + result);
+                LiquidGlassHelper.INSTANCE.setStatusText(result);
             }
             // 添加YUV文件路径显示
             if(result != null && result.endsWith(".yuv")) {
@@ -686,6 +770,8 @@ public class MainActivity extends AppCompatActivity {
         setPlaybackUiState(videoUri == null
                 ? PlaybackUiPolicy.PlaybackUiState.IDLE
                 : PlaybackUiPolicy.PlaybackUiState.READY);
+        setSurface(null);
+        releaseRenderSurface();
         // 释放 Native 层音频资源
         nativeReleaseAudio();
     }
