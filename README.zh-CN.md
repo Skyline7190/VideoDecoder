@@ -165,6 +165,28 @@ app/
 
 ---
 
+## Liquid Glass 性能优化
+
+液态玻璃 UI 每帧渲染多个 backdrop 面板，叠加 blur、lens 折射、vibrancy、highlight、shadow 和动画 shader。以下优化降低了每帧 GPU 和重组开销，使界面更加丝滑：
+
+1. **传感器驱动的重组节流** (`UISensor.kt`)
+   - 加速度计以 ~60Hz 频率更新，此前每帧都会触发整个 overlay 重组。
+   - 增加 2° 角度阈值过滤微小变化；内部平滑持续进行，但 Compose 状态仅在朝向发生有意义的变化时才更新。
+
+2. **呼吸动画提升至 overlay 级别** (`LiquidControls.kt`)
+   - 此前每个 `LiquidButton` 各自创建 `rememberInfiniteTransition` 用于呼吸脉冲（4+ 个无限动画同时运行）。
+   - 在 overlay 级别运行单一 `rememberInfiniteTransition`，通过 `LocalBreathingScale` CompositionLocal 分发给所有按钮。
+
+3. **不可见 backdrop 层精简** (`LiquidControls.kt` — `SpeedBottomTabs`)
+   - alpha=0 的隐藏 Row 仍在运行完整的 `vibrancy()` + `blur(8dp)` + `lens(24dp, 24dp)` 效果，GPU 全力计算但无可见输出。
+   - 移除效果和高光修饰符，仅保留 `layerBackdrop` 捕获供组合指示器 backdrop 使用。
+
+4. **冗余 shader pass 跳过** (`InteractiveHighlight.kt`)
+   - 径向高光 shader 每帧绘制两个 pass（主光 + 拖尾光），即使拖尾弹簧已收敛到主位置。
+   - 当两个位置差 < 1px 时跳过拖尾 pass，每帧节省一次 `RuntimeShader` 计算和绘制调用。
+
+---
+
 ## 构建要求
 
 - **Android Studio** 或命令行 Gradle

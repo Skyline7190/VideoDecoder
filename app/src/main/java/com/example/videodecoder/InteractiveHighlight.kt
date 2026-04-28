@@ -16,6 +16,7 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.util.fastCoerceIn
+import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
@@ -70,31 +71,29 @@ half4 main(float2 coord) {
             if (progress > 0f) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && shader != null) {
                     drawRect(Color.White.copy(0.08f * progress), blendMode = BlendMode.Plus)
+                    val pos = position(size, positionAnimation.value)
+                    val clampedX = pos.x.fastCoerceIn(0f, size.width)
+                    val clampedY = pos.y.fastCoerceIn(0f, size.height)
                     shader.apply {
-                        val pos = position(size, positionAnimation.value)
                         setFloatUniform("size", size.width, size.height)
                         setColorUniform("color", Color.White.copy(0.15f * progress).toArgb())
                         setFloatUniform("radius", size.minDimension * 1.5f)
-                        setFloatUniform(
-                            "position",
-                            pos.x.fastCoerceIn(0f, size.width),
-                            pos.y.fastCoerceIn(0f, size.height)
-                        )
+                        setFloatUniform("position", clampedX, clampedY)
                     }
                     drawRect(ShaderBrush(shader), blendMode = BlendMode.Plus)
 
-                    shader.apply {
-                        val trailPos = position(size, trailPositionAnimation.value)
-                        setFloatUniform("size", size.width, size.height)
-                        setColorUniform("color", Color.White.copy(0.1f * progress).toArgb())
-                        setFloatUniform("radius", size.minDimension * 1.1f)
-                        setFloatUniform(
-                            "position",
-                            trailPos.x.fastCoerceIn(0f, size.width),
-                            trailPos.y.fastCoerceIn(0f, size.height)
-                        )
+                    val trailPos = position(size, trailPositionAnimation.value)
+                    val trailClampedX = trailPos.x.fastCoerceIn(0f, size.width)
+                    val trailClampedY = trailPos.y.fastCoerceIn(0f, size.height)
+                    if (abs(trailClampedX - clampedX) > 1f || abs(trailClampedY - clampedY) > 1f) {
+                        shader.apply {
+                            setFloatUniform("size", size.width, size.height)
+                            setColorUniform("color", Color.White.copy(0.1f * progress).toArgb())
+                            setFloatUniform("radius", size.minDimension * 1.1f)
+                            setFloatUniform("position", trailClampedX, trailClampedY)
+                        }
+                        drawRect(ShaderBrush(shader), blendMode = BlendMode.Plus)
                     }
-                    drawRect(ShaderBrush(shader), blendMode = BlendMode.Plus)
                 } else {
                     drawRect(Color.White.copy(0.25f * progress), blendMode = BlendMode.Plus)
                 }

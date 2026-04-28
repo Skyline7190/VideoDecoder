@@ -71,6 +71,7 @@ import androidx.compose.ui.util.fastCoerceAtMost
 import androidx.compose.ui.util.fastRoundToInt
 import androidx.compose.ui.util.lerp
 import com.kyant.backdrop.Backdrop
+import com.kyant.backdrop.backdrops.LayerBackdrop
 import com.kyant.backdrop.backdrops.layerBackdrop
 import com.kyant.backdrop.backdrops.rememberCombinedBackdrop
 import com.kyant.backdrop.backdrops.rememberLayerBackdrop
@@ -79,6 +80,7 @@ import com.kyant.backdrop.effects.blur
 import com.kyant.backdrop.effects.lens
 import com.kyant.backdrop.effects.vibrancy
 import com.kyant.backdrop.highlight.Highlight
+import com.kyant.backdrop.highlight.HighlightStyle
 import com.kyant.backdrop.shadow.InnerShadow
 import com.kyant.backdrop.shadow.Shadow
 import com.kyant.shapes.Capsule
@@ -104,6 +106,8 @@ fun LiquidButton(
     chromaticAberration: Boolean = false,
     active: Boolean = false,
     enabled: Boolean = true,
+    embedded: Boolean = false,
+    highlightAngle: Float = 45f,
     modifier: Modifier = Modifier
 ) {
     val animationScope = rememberCoroutineScope()
@@ -128,61 +132,76 @@ fun LiquidButton(
         ),
         label = "liquidDirectPressProgress"
     )
-    val breathingPhase = rememberInfiniteTransition(label = "liquidBreathing")
-    val phase by breathingPhase.animateFloat(
-        initialValue = 0f,
-        targetValue = (Math.PI * 2.0).toFloat(),
-        animationSpec = infiniteRepeatable(
-            animation = tween(1800, easing = LinearEasing),
-            repeatMode = RepeatMode.Restart
-        ),
-        label = "liquidBreathingPhase"
-    )
-    val breathingScale = if (active && enabled) 1f + 0.014f * ((sin(phase) + 1f) * 0.5f) else 1f
+    val breathingScale = if (active && enabled) LocalBreathingScale.current else 1f
     val liquidProgress = max(interactiveHighlight.pressProgress, directPressProgress)
+    val glassProgress = if (embedded) max(activeProgress * 0.75f, liquidProgress) else liquidProgress
+    val shape = if (embedded) RoundedRectangle(18.dp) else Capsule()
 
     Box(
         modifier = modifier
             .graphicsLayer { alpha = if (enabled) 1f else 0.46f }
             .drawBackdrop(
                 backdrop = backdrop,
-                shape = { Capsule() },
+                shape = { shape },
                 effects = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         vibrancy()
-                        blur((3f + 8f * liquidProgress).dp.toPx())
+                        val baseBlur = if (embedded) 0.5f else 2f
+                        val pressBlur = if (embedded) 4f else 7f
+                        blur((baseBlur + pressBlur * glassProgress).dp.toPx())
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        val activeRefractionHeight = 6f.dp.toPx() * activeProgress
-                        val activeRefractionAmount = 8f.dp.toPx() * activeProgress
-                        val pressRefractionHeight = 22f.dp.toPx() * liquidProgress
-                        val pressRefractionAmount = 32f.dp.toPx() * liquidProgress
+                        val activeRefractionHeight = if (embedded) 3f.dp.toPx() * activeProgress else 6f.dp.toPx() * activeProgress
+                        val activeRefractionAmount = if (embedded) 5f.dp.toPx() * activeProgress else 8f.dp.toPx() * activeProgress
+                        val pressRefractionHeight = (if (embedded) 12f else 18f).dp.toPx() * glassProgress
+                        val pressRefractionAmount = (if (embedded) 18f else 26f).dp.toPx() * glassProgress
                         lens(
-                            12f.dp.toPx() + activeRefractionHeight + pressRefractionHeight,
-                            24f.dp.toPx() + activeRefractionAmount + pressRefractionAmount,
-                            depthEffect = active || liquidProgress > 0.05f,
-                            chromaticAberration = chromaticAberration || liquidProgress > 0.08f
+                            (if (embedded) 6f else 12f).dp.toPx() + activeRefractionHeight + pressRefractionHeight,
+                            (if (embedded) 12f else 24f).dp.toPx() + activeRefractionAmount + pressRefractionAmount,
+                            depthEffect = active || glassProgress > 0.05f,
+                            chromaticAberration = chromaticAberration || glassProgress > 0.10f
                         )
                     }
                 },
                 highlight = {
-                    Highlight.Default.copy(alpha = lerp(0.55f, 1f, activeProgress).coerceAtLeast(liquidProgress))
+                    Highlight.Default.copy(
+                        alpha = if (embedded) {
+                            lerp(0.12f, 0.55f, activeProgress).coerceAtLeast(0.58f * liquidProgress)
+                        } else {
+                            lerp(0.55f, 1f, activeProgress).coerceAtLeast(liquidProgress)
+                        },
+                        style = HighlightStyle.Default(angle = highlightAngle, falloff = if (embedded) 1.7f else 1.35f)
+                    )
                 },
                 shadow = {
-                    Shadow(alpha = lerp(0.58f, 0.96f, activeProgress).coerceAtLeast(0.92f * liquidProgress))
+                    Shadow(
+                        alpha = if (embedded) {
+                            lerp(0.06f, 0.28f, activeProgress).coerceAtLeast(0.30f * liquidProgress)
+                        } else {
+                            lerp(0.34f, 0.78f, activeProgress).coerceAtLeast(0.72f * liquidProgress)
+                        }
+                    )
                 },
                 innerShadow = {
                     InnerShadow(
-                        radius = 8.dp + 12.dp * liquidProgress,
-                        alpha = lerp(0.48f, 0.94f, activeProgress).coerceAtLeast(liquidProgress)
+                        radius = if (embedded) 4.dp + 6.dp * glassProgress else 6.dp + 10.dp * liquidProgress,
+                        alpha = if (embedded) {
+                            lerp(0.08f, 0.34f, activeProgress).coerceAtLeast(0.42f * liquidProgress)
+                        } else {
+                            lerp(0.32f, 0.76f, activeProgress).coerceAtLeast(0.82f * liquidProgress)
+                        }
                     )
                 },
                 layerBlock = {
                     val width = size.width
                     val height = size.height
-                    val progress = liquidProgress
+                    val progress = glassProgress
                     val activeScale = lerp(1f, 1f + 2f.dp.toPx() / size.height, activeProgress)
-                    val scale = lerp(activeScale, activeScale + 18f.dp.toPx() / size.height, progress)
+                    val scale = lerp(
+                        activeScale,
+                        activeScale + (if (embedded) 7f else 12f).dp.toPx() / size.height,
+                        progress
+                    )
                     val maxOffset = size.minDimension
                     val offset = interactiveHighlight.offset
                     val offsetX = maxOffset * tanh(0.12f * offset.x / maxOffset)
@@ -192,7 +211,7 @@ fun LiquidButton(
                     translationY = offsetY
                     rotationZ = lerp(0f, 3.2f, progress) * (offsetX / maxOffset)
 
-                    val maxDragScale = 18f.dp.toPx() / size.height
+                    val maxDragScale = (if (embedded) 7f else 12f).dp.toPx() / size.height
                     val offsetAngle = atan2(offset.y, offset.x)
                     scaleX =
                         scale +
@@ -206,21 +225,27 @@ fun LiquidButton(
                 onDrawSurface = {
                     if (tint.isSpecified) {
                         drawRect(tint, blendMode = BlendMode.Hue)
-                        drawRect(tint.copy(alpha = lerp(0.22f, 0.36f, activeProgress)))
-                        drawRect(Color.White.copy(alpha = 0.12f + 0.14f * liquidProgress), blendMode = BlendMode.Plus)
+                        drawRect(tint.copy(alpha = lerp(if (embedded) 0.08f else 0.16f, if (embedded) 0.18f else 0.28f, activeProgress)))
+                        drawRect(
+                            Color.White.copy(alpha = (if (embedded) 0.04f else 0.09f) + (if (embedded) 0.08f else 0.10f) * liquidProgress),
+                            blendMode = BlendMode.Plus
+                        )
                     }
                     if (surfaceColor.isSpecified) {
+                        val baseAlphaScale = if (embedded) 0.36f else 1f
                         drawRect(
                             surfaceColor.copy(
-                                alpha = surfaceColor.alpha + 0.06f * activeProgress + 0.14f * liquidProgress
+                                alpha = surfaceColor.alpha * baseAlphaScale +
+                                    (if (embedded) 0.08f else 0.04f) * activeProgress +
+                                    (if (embedded) 0.05f else 0.08f) * liquidProgress
                             )
                         )
                     }
                     if (activeProgress > 0f) {
-                        drawRect(Color.White.copy(alpha = 0.08f * activeProgress), blendMode = BlendMode.Plus)
+                        drawRect(Color.White.copy(alpha = (if (embedded) 0.10f else 0.06f) * activeProgress), blendMode = BlendMode.Plus)
                     }
                     if (liquidProgress > 0f) {
-                        drawRect(Color.Black.copy(alpha = 0.10f * liquidProgress), blendMode = BlendMode.Multiply)
+                        drawRect(Color.Black.copy(alpha = (if (embedded) 0.03f else 0.06f) * liquidProgress), blendMode = BlendMode.Multiply)
                     }
                 }
             )
@@ -275,11 +300,26 @@ fun LiquidControlsOverlay(
     onSeekTo: (Int) -> Unit
 ) {
     MaterialTheme(colorScheme = darkColorScheme()) {
+        val uiSensor = rememberUISensor()
+        val highlightAngle = uiSensor.gravityAngle
         val backdrop = rememberLayerBackdrop()
         val progressEnabled = durationMs > 0
         val safeDuration = durationMs.coerceAtLeast(1)
         val safeCurrent = currentPositionMs.coerceIn(0, safeDuration)
 
+        val breathingTransition = rememberInfiniteTransition(label = "liquidBreathing")
+        val breathingPhaseValue by breathingTransition.animateFloat(
+            initialValue = 0f,
+            targetValue = (Math.PI * 2.0).toFloat(),
+            animationSpec = infiniteRepeatable(
+                animation = tween(1800, easing = LinearEasing),
+                repeatMode = RepeatMode.Restart
+            ),
+            label = "liquidBreathingPhase"
+        )
+        val breathingScaleValue = 1f + 0.014f * ((sin(breathingPhaseValue) + 1f) * 0.5f)
+
+        CompositionLocalProvider(LocalBreathingScale provides breathingScaleValue) {
         BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
@@ -316,13 +356,15 @@ fun LiquidControlsOverlay(
                 horizontalPadding = pageHorizontalPadding,
                 height = headerHeight,
                 playbackStateLabel = playbackStateLabel,
-                statusText = statusText
+                statusText = statusText,
+                highlightAngle = highlightAngle
             )
 
             ProgressPanel(
                 backdrop = backdrop,
                 topPadding = progressTopPadding,
-                horizontalPadding = 20.dp
+                horizontalPadding = 20.dp,
+                highlightAngle = highlightAngle
             ) { progressBackdrop ->
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -354,11 +396,14 @@ fun LiquidControlsOverlay(
                 }
             }
 
-            GlassPanel(
-                backdrop = backdrop,
-                topPadding = controlsTopPadding,
-                horizontalPadding = 16.dp
-            ) { controlsBackdrop ->
+            Column(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = controlsTopPadding)
+                    .padding(horizontal = 16.dp)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -366,20 +411,22 @@ fun LiquidControlsOverlay(
                     LiquidButton(
                         "Select",
                         onSelect,
-                        controlsBackdrop,
-                        surfaceColor = Color.White.copy(alpha = 0.22f),
+                        backdrop,
+                        surfaceColor = Color.White.copy(alpha = 0.14f),
                         textColor = Color.White,
                         chromaticAberration = true,
+                        highlightAngle = highlightAngle,
                         modifier = Modifier.weight(1f)
                     )
                     LiquidButton(
                         "Decode",
                         onDecode,
-                        controlsBackdrop,
-                        surfaceColor = Color.White.copy(alpha = 0.22f),
+                        backdrop,
+                        surfaceColor = Color.White.copy(alpha = 0.14f),
                         textColor = Color.White,
                         chromaticAberration = true,
                         active = isPlaying,
+                        highlightAngle = highlightAngle,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -391,21 +438,23 @@ fun LiquidControlsOverlay(
                     LiquidButton(
                         if (isPlaying) "Playing" else "Play",
                         onPlay,
-                        controlsBackdrop,
-                        surfaceColor = Color.White.copy(alpha = 0.22f),
+                        backdrop,
+                        surfaceColor = Color.White.copy(alpha = 0.14f),
                         textColor = Color.White,
                         chromaticAberration = true,
                         active = isPlaying,
+                        highlightAngle = highlightAngle,
                         modifier = Modifier.weight(1f)
                     )
                     LiquidButton(
                         "Pause",
                         onPause,
-                        controlsBackdrop,
-                        surfaceColor = Color.White.copy(alpha = 0.22f),
+                        backdrop,
+                        surfaceColor = Color.White.copy(alpha = 0.14f),
                         textColor = Color.White,
                         chromaticAberration = true,
                         active = !isPlaying && playbackStateLabel == "PAUSED",
+                        highlightAngle = highlightAngle,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -416,12 +465,14 @@ fun LiquidControlsOverlay(
                 ) {
                     SpeedBottomTabs(
                         selectedSpeed = selectedSpeed,
-                        backdrop = controlsBackdrop,
+                        backdrop = backdrop,
                         onSpeed = onSpeed,
+                        highlightAngle = highlightAngle,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
+        }
         }
     }
 }
@@ -433,10 +484,10 @@ private fun BoxScope.HeaderPanel(
     horizontalPadding: Dp,
     height: Dp,
     playbackStateLabel: String,
-    statusText: String
+    statusText: String,
+    highlightAngle: Float
 ) {
-    val headerBackdrop = rememberLayerBackdrop()
-    Row(
+    Column(
         modifier = Modifier
             .align(Alignment.TopCenter)
             .padding(horizontal = horizontalPadding)
@@ -449,59 +500,69 @@ private fun BoxScope.HeaderPanel(
                 effects = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
                         vibrancy()
-                        blur(6f.dp.toPx())
+                        blur(5f.dp.toPx())
                     }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        lens(18f.dp.toPx(), 34f.dp.toPx(), depthEffect = true, chromaticAberration = true)
+                        lens(16f.dp.toPx(), 30f.dp.toPx(), depthEffect = true, chromaticAberration = true)
                     }
                 },
-                highlight = { Highlight.Plain },
-                exportedBackdrop = headerBackdrop,
-                shadow = { Shadow(radius = 18.dp, alpha = 0.20f) },
-                innerShadow = { InnerShadow(radius = 12.dp, alpha = 0.32f) },
+                highlight = {
+                    Highlight(
+                        alpha = 0.72f,
+                        style = HighlightStyle.Default(angle = highlightAngle, falloff = 2f)
+                    )
+                },
+                shadow = { Shadow(radius = 14.dp, alpha = 0.12f) },
+                innerShadow = { InnerShadow(radius = 10.dp, alpha = 0.18f) },
                 onDrawSurface = {
-                    drawRect(Color.Black.copy(alpha = 0.14f), blendMode = BlendMode.Multiply)
-                    drawRect(Color.White.copy(alpha = 0.20f), blendMode = BlendMode.Plus)
+                    drawRect(Color.Black.copy(alpha = 0.06f), blendMode = BlendMode.Multiply)
+                    drawRect(Color.White.copy(alpha = 0.10f), blendMode = BlendMode.Plus)
                 }
             )
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Column(
-            modifier = Modifier.weight(1f),
-            verticalArrangement = Arrangement.spacedBy(5.dp)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "Video Decoder",
                 color = Color.White,
-                fontSize = 22.sp,
+                fontSize = 21.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
             )
-            Text(
-                text = statusText.ifBlank { "Native Player" },
-                color = Color.White.copy(alpha = 0.84f),
-                fontSize = 12.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                HeaderChip(playbackStateLabel, backdrop, highlightAngle)
+                HeaderChip("RENDER", backdrop, highlightAngle)
+            }
         }
-        Column(
-            horizontalAlignment = Alignment.End,
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            HeaderChip(playbackStateLabel, headerBackdrop)
-            HeaderChip("RENDER", headerBackdrop)
-        }
+
+        Text(
+            text = statusText.ifBlank { "Native Player" },
+            color = Color.White.copy(alpha = 0.80f),
+            fontSize = 12.sp,
+            lineHeight = 15.sp,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
 @Composable
 private fun HeaderChip(
     text: String,
-    backdrop: Backdrop
+    backdrop: Backdrop,
+    highlightAngle: Float
 ) {
     Box(
         modifier = Modifier
@@ -517,11 +578,16 @@ private fun HeaderChip(
                         lens(8f.dp.toPx(), 16f.dp.toPx(), chromaticAberration = true)
                     }
                 },
-                highlight = { Highlight.Default },
-                shadow = { Shadow(alpha = 0.42f) },
-                innerShadow = { InnerShadow(alpha = 0.42f) },
+                highlight = {
+                    Highlight.Default.copy(
+                        alpha = 0.70f,
+                        style = HighlightStyle.Default(angle = highlightAngle, falloff = 1.6f)
+                    )
+                },
+                shadow = { Shadow(alpha = 0.30f) },
+                innerShadow = { InnerShadow(alpha = 0.32f) },
                 onDrawSurface = {
-                    drawRect(Color.White.copy(alpha = 0.24f))
+                    drawRect(Color.White.copy(alpha = 0.18f))
                 }
             )
             .padding(horizontal = 9.dp, vertical = 3.dp),
@@ -541,6 +607,7 @@ private fun BoxScope.ProgressPanel(
     backdrop: Backdrop,
     topPadding: Dp,
     horizontalPadding: Dp,
+    highlightAngle: Float,
     content: @Composable ColumnScope.(Backdrop) -> Unit
 ) {
     val progressBackdrop = rememberLayerBackdrop()
@@ -562,13 +629,18 @@ private fun BoxScope.ProgressPanel(
                         lens(18f.dp.toPx(), 34f.dp.toPx(), depthEffect = true, chromaticAberration = true)
                     }
                 },
-                highlight = { Highlight.Plain },
+                highlight = {
+                    Highlight(
+                        alpha = 0.66f,
+                        style = HighlightStyle.Default(angle = highlightAngle, falloff = 2f)
+                    )
+                },
                 exportedBackdrop = progressBackdrop,
-                shadow = { Shadow(radius = 16.dp, alpha = 0.18f) },
-                innerShadow = { InnerShadow(radius = 10.dp, alpha = 0.30f) },
+                shadow = { Shadow(radius = 16.dp, alpha = 0.14f) },
+                innerShadow = { InnerShadow(radius = 10.dp, alpha = 0.24f) },
                 onDrawSurface = {
-                    drawRect(Color.Black.copy(alpha = 0.14f), blendMode = BlendMode.Multiply)
-                    drawRect(Color.White.copy(alpha = 0.20f), blendMode = BlendMode.Plus)
+                    drawRect(Color.Black.copy(alpha = 0.08f), blendMode = BlendMode.Multiply)
+                    drawRect(Color.White.copy(alpha = 0.13f), blendMode = BlendMode.Plus)
                 }
             )
             .padding(horizontal = 14.dp, vertical = 7.dp),
@@ -577,50 +649,10 @@ private fun BoxScope.ProgressPanel(
 }
 
 @Composable
-private fun BoxScope.GlassPanel(
-    backdrop: Backdrop,
-    topPadding: Dp,
-    horizontalPadding: Dp,
-    content: @Composable ColumnScope.(Backdrop) -> Unit
-) {
-    val controlsBackdrop = rememberLayerBackdrop()
-    Column(
-        modifier = Modifier
-            .align(Alignment.TopCenter)
-            .padding(top = topPadding)
-            .padding(horizontal = horizontalPadding)
-            .fillMaxWidth()
-            .drawBackdrop(
-                backdrop = backdrop,
-                shape = { RoundedRectangle(32.dp) },
-                effects = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        vibrancy()
-                        blur(8f.dp.toPx())
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        lens(24f.dp.toPx(), 48f.dp.toPx(), depthEffect = true, chromaticAberration = true)
-                    }
-                },
-                highlight = { Highlight.Plain },
-                exportedBackdrop = controlsBackdrop,
-                shadow = { Shadow(radius = 24.dp, alpha = 0.24f) },
-                innerShadow = { InnerShadow(radius = 14.dp, alpha = 0.42f) },
-                onDrawSurface = {
-                    drawRect(Color.White.copy(alpha = 0.20f))
-                    drawRect(Color.Black.copy(alpha = 0.16f), blendMode = BlendMode.Multiply)
-                }
-            )
-            .padding(horizontal = 14.dp, vertical = 14.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-        content = { content(controlsBackdrop) }
-    )
-}
-
-@Composable
 private fun StatusPill(
     label: String,
     backdrop: Backdrop,
+    highlightAngle: Float,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(visible = label.isNotBlank(), modifier = modifier) {
@@ -638,12 +670,17 @@ private fun StatusPill(
                             lens(10f.dp.toPx(), 22f.dp.toPx(), chromaticAberration = true)
                         }
                     },
-                    highlight = { Highlight.Default },
-                    shadow = { Shadow(alpha = 0.55f) },
-                    innerShadow = { InnerShadow(alpha = 0.55f) },
+                    highlight = {
+                        Highlight.Default.copy(
+                            alpha = 0.70f,
+                            style = HighlightStyle.Default(angle = highlightAngle, falloff = 1.6f)
+                        )
+                    },
+                    shadow = { Shadow(alpha = 0.38f) },
+                    innerShadow = { InnerShadow(alpha = 0.40f) },
                     onDrawSurface = {
-                        drawRect(Color.Black.copy(alpha = 0.16f))
-                        drawRect(Color.White.copy(alpha = 0.20f), blendMode = BlendMode.Plus)
+                        drawRect(Color.Black.copy(alpha = 0.10f))
+                        drawRect(Color.White.copy(alpha = 0.14f), blendMode = BlendMode.Plus)
                     }
                 )
                 .padding(horizontal = 14.dp, vertical = 7.dp),
@@ -664,6 +701,7 @@ private fun SpeedBottomTabs(
     selectedSpeed: Float,
     backdrop: Backdrop,
     onSpeed: (Float) -> Unit,
+    highlightAngle: Float,
     modifier: Modifier = Modifier
 ) {
     val speedValues = remember { listOf(0.5f, 1.0f, 2.0f, 3.0f) }
@@ -764,9 +802,15 @@ private fun SpeedBottomTabs(
                         scaleX = scale
                         scaleY = scale
                     },
+                    highlight = {
+                        Highlight(
+                            alpha = 0.64f,
+                            style = HighlightStyle.Default(angle = highlightAngle, falloff = 1.8f)
+                        )
+                    },
                     onDrawSurface = {
-                        drawRect(Color.White.copy(alpha = 0.24f))
-                        drawRect(Color.Black.copy(alpha = 0.08f), blendMode = BlendMode.Multiply)
+                        drawRect(Color.White.copy(alpha = 0.16f))
+                        drawRect(Color.Black.copy(alpha = 0.06f), blendMode = BlendMode.Multiply)
                     }
                 )
                 .then(interactiveHighlight.modifier)
@@ -799,26 +843,6 @@ private fun SpeedBottomTabs(
                     .alpha(0f)
                     .layerBackdrop(tabsBackdrop)
                     .graphicsLayer { translationX = panelOffset }
-                    .drawBackdrop(
-                        backdrop = backdrop,
-                        shape = { Capsule() },
-                        effects = {
-                            val progress = dampedDragAnimation.pressProgress
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                                vibrancy()
-                                blur(8f.dp.toPx())
-                            }
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                lens(24f.dp.toPx() * progress, 24f.dp.toPx() * progress)
-                            }
-                        },
-                    highlight = {
-                        val progress = dampedDragAnimation.pressProgress
-                        Highlight.Default.copy(alpha = lerp(0.55f, 1f, progress))
-                    },
-                    onDrawSurface = { drawRect(Color.White.copy(alpha = 0.18f)) }
-                )
-                    .then(interactiveHighlight.modifier)
                     .height(56.dp)
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp),
@@ -864,6 +888,7 @@ private fun SpeedBottomTabs(
                     highlight = {
                         val progress = dampedDragAnimation.pressProgress
                         Highlight.Default.copy(alpha = lerp(0.65f, 1f, progress))
+                            .copy(style = HighlightStyle.Default(angle = highlightAngle, falloff = 1.6f))
                     },
                     shadow = {
                         val progress = dampedDragAnimation.pressProgress
@@ -882,8 +907,8 @@ private fun SpeedBottomTabs(
                     },
                     onDrawSurface = {
                         val progress = dampedDragAnimation.pressProgress
-                        drawRect(Color.White.copy(alpha = 0.30f), alpha = 1f - progress)
-                        drawRect(Color.White.copy(alpha = 0.16f * progress), blendMode = BlendMode.Plus)
+                        drawRect(Color.White.copy(alpha = 0.24f), alpha = 1f - progress)
+                        drawRect(Color.White.copy(alpha = 0.12f * progress), blendMode = BlendMode.Plus)
                         drawRect(Color.Black.copy(alpha = 0.02f * progress))
                     }
                 )
@@ -894,6 +919,7 @@ private fun SpeedBottomTabs(
 }
 
 private val LocalSpeedTabScale = staticCompositionLocalOf { { 1f } }
+private val LocalBreathingScale = staticCompositionLocalOf { 1f }
 
 @Composable
 private fun RowScope.SpeedBottomTab(

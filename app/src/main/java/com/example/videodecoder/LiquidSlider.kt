@@ -1,8 +1,8 @@
 package com.example.videodecoder
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -133,31 +134,53 @@ fun LiquidSlider(
                 .fillMaxWidth()
                 .height(40.dp)
                 .layerBackdrop(trackBackdrop)
-                .pointerInput(animationScope, enabled, trackWidth) {
-                    detectDragGestures(
-                        onDragStart = { position ->
-                            if (enabled) {
+                .pointerInput(animationScope, enabled, trackWidth, safeRange.start, safeRange.endInclusive, isLtr) {
+                    if (enabled) {
+                        awaitEachGesture {
+                            var finished = false
+                            try {
+                                val down = awaitFirstDown(requireUnconsumed = false)
                                 isDragging = true
-                                didDrag = true
+                                didDrag = false
                                 dampedDragAnimation.press()
-                                dragValue = valueAt(position.x)
+                                dragValue = valueAt(down.position.x)
                                 dampedDragAnimation.snapToValue(dragValue)
+                                down.consume()
+
+                                var commit = true
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    val change = event.changes.firstOrNull { it.id == down.id }
+                                    if (change == null) {
+                                        commit = false
+                                        break
+                                    }
+
+                                    dragValue = valueAt(change.position.x)
+                                    dampedDragAnimation.snapToValue(dragValue)
+
+                                    if (change.changedToUpIgnoreConsumed()) {
+                                        change.consume()
+                                        break
+                                    }
+
+                                    if (change.pressed) {
+                                        if (change.position != change.previousPosition) {
+                                            didDrag = true
+                                        }
+                                        change.consume()
+                                    } else {
+                                        commit = false
+                                        break
+                                    }
+                                }
+                                finishDrag(commit = commit)
+                                finished = true
+                            } finally {
+                                if (!finished && isDragging) {
+                                    finishDrag(commit = false)
+                                }
                             }
-                        },
-                        onDragEnd = {
-                            finishDrag(commit = didDrag)
-                        },
-                        onDragCancel = {
-                            finishDrag(commit = false)
-                        }
-                    ) { change, dragAmount ->
-                        if (enabled) {
-                            change.consume()
-                            val delta = (safeRange.endInclusive - safeRange.start) * (dragAmount.x / trackWidth)
-                            dragValue =
-                                if (isLtr) (dragValue + delta).coerceIn(safeRange)
-                                else (dragValue - delta).coerceIn(safeRange)
-                            dampedDragAnimation.snapToValue(dragValue)
                         }
                     }
                 },
@@ -167,16 +190,6 @@ fun LiquidSlider(
                 Modifier
                     .clip(Capsule())
                     .background(trackColor)
-                    .pointerInput(animationScope, enabled) {
-                        detectTapGestures { position ->
-                            if (!enabled) {
-                                return@detectTapGestures
-                            }
-                            dragValue = valueAt(position.x)
-                            dampedDragAnimation.animateToValue(dragValue)
-                            onValueChange(dragValue)
-                        }
-                    }
                     .height(7.dp)
                     .fillMaxWidth()
             )

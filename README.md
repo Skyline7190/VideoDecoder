@@ -160,6 +160,28 @@ app/
 
 ---
 
+## Liquid Glass Performance Optimizations
+
+The liquid glass UI renders multiple backdrop panels with blur, lens refraction, vibrancy, highlights, shadows, and animated shaders. The following optimizations reduce per-frame GPU and recomposition overhead to keep the interface smooth:
+
+1. **Sensor-driven recomposition throttling** (`UISensor.kt`)
+   - Accelerometer updates arrive at ~60 Hz and previously triggered full overlay recomposition every frame.
+   - A 2-degree angle threshold filters sub-threshold changes; internal smoothing continues but Compose state only updates on meaningful orientation shifts.
+
+2. **Shared breathing animation** (`LiquidControls.kt`)
+   - Each `LiquidButton` previously created its own `rememberInfiniteTransition` for the breathing pulse (4+ infinite transitions running simultaneously).
+   - A single `rememberInfiniteTransition` runs at the overlay level and distributes the breathing scale via `LocalBreathingScale` CompositionLocal.
+
+3. **Invisible backdrop layer trimming** (`LiquidControls.kt` — `SpeedBottomTabs`)
+   - A secondary Row at `alpha = 0` was rendering full `vibrancy()` + `blur(8dp)` + `lens(24dp, 24dp)` effects for no visible output.
+   - Effects and highlight modifiers are stripped; only `layerBackdrop` capture is retained for the combined indicator backdrop.
+
+4. **Redundant shader pass skip** (`InteractiveHighlight.kt`)
+   - The radial highlight shader drew two passes per frame (main + trail) even when the trail spring had converged to the main position.
+   - The trail pass is skipped when both positions are within 1 px, saving one `RuntimeShader` evaluation and draw call per frame.
+
+---
+
 ## Build Requirements
 
 - Android Studio or command-line Gradle.
