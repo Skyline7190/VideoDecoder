@@ -29,6 +29,8 @@ This turns cross-environment code edits, NDK build-chain adaptation, Gradle vali
 - Modern **Liquid Glass** interaction built with Jetpack Compose and AndroidLiquidGlass.
 - Four-zone player layout: top text/status area, video area, progress area, and button area.
 - Liquid Glass progress slider with drag deformation, release-to-seek, and stable drag-state cleanup.
+- Select, decode, play, and pause buttons use AndroidLiquidGlass-style physical drag deformation, elastic rebound, and real backdrop refraction.
+- Speed tabs use a bright translucent glass container with a liquid indicator and drag-to-change interaction.
 
 ---
 
@@ -113,16 +115,17 @@ The project integrates the AndroidLiquidGlass style to create an iOS/visionOS-li
 2. **Liquid Glass Interaction**
    - `LiquidControls.kt`: Compose Liquid Glass panels and buttons based on `rememberLayerBackdrop()` and `drawBackdrop`.
    - `LiquidSlider.kt`: Liquid Glass progress slider with direct drag tracking and release-to-seek.
-   - `DampedDragAnimation.kt`: drag deformation, press/release animation, and stable cleanup.
-   - `InteractiveHighlight.kt`: press highlights, drag trail, and elastic deformation using nonlinear displacement and direction-aware scaling.
+   - `DampedDragAnimation.kt`: drag deformation, press/release animation, cancellation of stale value animations, and stable cleanup during long drags.
+   - `InteractiveHighlight.kt`: press highlights and elastic deformation using nonlinear displacement and direction-aware scaling.
    - `DragGestureInspector.kt`: shared gesture parsing utilities.
 
 3. **Visual Consistency**
    - Top status panel, progress panel, and button panel share the same Liquid Glass visual language.
    - Select, decode, play/pause, and speed controls use transparent glass styling instead of strong red/blue tint blocks.
    - The background uses `wallpaper_light.webp` from AndroidLiquidGlass as the root/window background with edge-to-edge window rendering.
+   - The Compose overlay records the same wallpaper into a `LayerBackdrop` source around the video region, so buttons and panels refract real background pixels instead of a transparent layer.
    - Playback state is synchronized through `LiquidGlassHelper` and reflected in button activity and status text.
-   - Active button and speed tab text uses accent blue (`#0091FF`) instead of white.
+   - Active decode/playing/pause button text and speed tab state use accent blue (`#0091FF` / system-blue variants) instead of plain white.
 
 4. **Ripple Effect** (`Ripple.kt`)
    - Custom `glassRipple()` with reduced alpha values (pressed 0.1, dragged 0.16, hovered 0.08) for a subtler glass feel.
@@ -130,7 +133,8 @@ The project integrates the AndroidLiquidGlass style to create an iOS/visionOS-li
 
 5. **Parameter Alignment with AndroidLiquidGlass Catalog**
    - `LiquidSlider.kt`: thumb 40×24dp, track 6dp, shadow alpha 0.05f.
-   - `SpeedBottomTabs`: container 64dp, pressedScale 78/56, indicator highlight/shadow alpha follows `progress`, indicator `onDrawSurface` uses theme-aware dark color (`White.copy(0.1f)`).
+   - `LiquidButton`: restores the catalog-style `InteractiveHighlight.gestureModifier` path so finger movement drives nonlinear displacement, stretch, and rebound.
+   - `SpeedBottomTabs`: container 64dp, pressedScale 78/56, indicator highlight/shadow alpha follows `progress`, with a bright translucent glass surface and subtle Plus-mode sheen.
    - Invisible tab layer retains `layerBackdrop` capture with `ColorFilter.tint(accentColor)` for indicator backdrop.
 
 6. **Edge-to-Edge Window**
@@ -188,17 +192,17 @@ The liquid glass UI renders multiple backdrop panels with blur, lens refraction,
    - Accelerometer updates arrive at ~60 Hz and previously triggered full overlay recomposition every frame.
    - A 2-degree angle threshold filters sub-threshold changes; internal smoothing continues but Compose state only updates on meaningful orientation shifts.
 
-2. **Shared breathing animation** (`LiquidControls.kt`)
-   - Each `LiquidButton` previously created its own `rememberInfiniteTransition` for the breathing pulse (4+ infinite transitions running simultaneously).
-   - A single `rememberInfiniteTransition` runs at the overlay level and distributes the breathing scale via `LocalBreathingScale` CompositionLocal.
+2. **Gesture animation cancellation** (`DampedDragAnimation.kt`)
+   - Progress dragging previously risked accumulating value animations during long touch sessions.
+   - The current animation controller cancels stale value/press jobs, keeps only the latest drag target, and releases deterministically.
 
-3. **Invisible backdrop layer trimming** (`LiquidControls.kt` — `SpeedBottomTabs`)
-   - A secondary Row at `alpha = 0` was rendering full `vibrancy()` + `blur(8dp)` + `lens(24dp, 24dp)` effects for no visible output.
-   - Effects and highlight modifiers are stripped; only `layerBackdrop` capture is retained for the combined indicator backdrop.
+3. **Backdrop source scoping** (`LiquidControls.kt`)
+   - AndroidLiquidGlass effects need a Compose-recorded backdrop source; XML-only backgrounds are not enough for real lens sampling.
+   - The overlay records `wallpaper_light.webp` into a `LayerBackdrop` around the video region, giving glass controls real pixels while avoiding a wallpaper layer over the native video surface.
 
-4. **Redundant shader pass skip** (`InteractiveHighlight.kt`)
-   - The radial highlight shader drew two passes per frame (main + trail) even when the trail spring had converged to the main position.
-   - The trail pass is skipped when both positions are within 1 px, saving one `RuntimeShader` evaluation and draw call per frame.
+4. **Single-pass highlight shader** (`InteractiveHighlight.kt`)
+   - Button highlights now use one radial shader pass driven by the actual gesture position.
+   - The same state drives nonlinear displacement, stretch, and release instead of running a separate decorative trail animation.
 
 ---
 
@@ -410,7 +414,10 @@ flowchart LR
 - EGL display, surface, and context setup/cleanup are extracted into `NativeEgl`.
 - Visible rendering moved to `TextureView`, with SurfaceTexture buffer sizing kept in sync.
 - OpenGL viewport uses `AspectFill / CenterCrop` to reduce black borders.
-- Liquid slider drag now snaps while dragging and releases deterministically.
+- Liquid slider drag uses a 40dp touch target, freezes external progress sync while interacting, cancels stale value animations, and releases deterministically.
+- Select/decode/play/pause buttons restore AndroidLiquidGlass physical drag: finger-position highlight, nonlinear displacement, stretch, and elastic rebound.
+- The Compose overlay records the wallpaper into `LayerBackdrop` around the video window, giving Liquid Glass controls real background pixels for blur/lens refraction.
+- Speed tabs use a bright translucent glass container and a subtle blue-accented liquid indicator instead of a dark tinted panel.
 - `PacketQueue::push()` periodically checks seek state while blocked by queue backpressure.
 
 ---
@@ -424,9 +431,11 @@ flowchart LR
 - **Top information panel**: Liquid Glass surface synchronized through `LiquidGlassHelper.setStatusText()`.
 - **Progress placement**: progress stays close to the video area; buttons stay close to progress.
 - **Unified transparent glass controls**: select, decode, play/pause, and speed controls share the same backdrop language.
+- **Physical button interaction**: select, decode, play, and pause buttons keep the AndroidLiquidGlass drag/rebound model, with click pulse only as a short-tap fallback.
+- **Real backdrop sampling**: Compose records the wallpaper backdrop around the video window so glass blur and lens effects scatter actual background pixels.
 - **State linkage**: `MainActivity` maps playback state to chips, button activity, progress, and Compose state.
-- **Motion rhythm**: entrance and state transitions use subtle fade/slide animation; active buttons use lightweight breathing motion.
-- **Visual parameter alignment**: slider thumb 40×24dp, track 6dp; speed tabs container 64dp, indicator alpha follows press progress.
+- **Motion rhythm**: entrance and state transitions use subtle fade/slide animation; drag controls use spring release and elastic cleanup.
+- **Visual parameter alignment**: slider thumb 40×24dp, track 6dp; speed tabs container 64dp, indicator alpha follows press progress with a bright glass surface.
 - **Custom ripple**: `glassRipple()` with reduced alpha for subtler glass feedback.
 
 ---

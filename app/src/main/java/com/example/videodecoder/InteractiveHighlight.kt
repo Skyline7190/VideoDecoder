@@ -16,35 +16,29 @@ import androidx.compose.ui.graphics.ShaderBrush
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.util.fastCoerceIn
-import kotlin.math.abs
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class InteractiveHighlight(
     private val animationScope: CoroutineScope,
     private val position: (size: Size, offset: Offset) -> Offset = { _, offset -> offset }
 ) {
-    private val pressProgressAnimationSpec = spring(0.7f, 220f, 0.001f)
-    private val positionAnimationSpec = spring(0.58f, 260f, Offset.VisibilityThreshold)
-    private val trailAnimationSpec = spring(0.72f, 150f, Offset.VisibilityThreshold)
+    private val pressProgressAnimationSpec =
+        spring(0.5f, 300f, 0.001f)
+    private val positionAnimationSpec =
+        spring(0.5f, 300f, Offset.VisibilityThreshold)
 
-    private val pressProgressAnimation = Animatable(0f, 0.001f)
+    private val pressProgressAnimation =
+        Animatable(0f, 0.001f)
     private val positionAnimation =
-        Animatable(Offset.Zero, Offset.VectorConverter, Offset.VisibilityThreshold)
-    private val trailPositionAnimation =
         Animatable(Offset.Zero, Offset.VectorConverter, Offset.VisibilityThreshold)
 
     private var startPosition = Offset.Zero
+    private var pressJob: Job? = null
     val pressProgress: Float get() = pressProgressAnimation.value
-    val offset: Offset
-        get() {
-            val p = positionAnimation.value
-            val t = trailPositionAnimation.value
-            return Offset(
-                x = p.x * 0.72f + t.x * 0.28f,
-                y = p.y * 0.72f + t.y * 0.28f
-            ) - startPosition
-        }
+    val offset: Offset get() = positionAnimation.value - startPosition
 
     private val shader =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -70,32 +64,21 @@ half4 main(float2 coord) {
             val progress = pressProgressAnimation.value
             if (progress > 0f) {
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && shader != null) {
-                    drawRect(Color.White.copy(0.08f * progress), blendMode = BlendMode.Plus)
-                    val pos = position(size, positionAnimation.value)
-                    val clampedX = pos.x.fastCoerceIn(0f, size.width)
-                    val clampedY = pos.y.fastCoerceIn(0f, size.height)
+                    drawRect(Color.White.copy(0.1f * progress), blendMode = BlendMode.Plus)
                     shader.apply {
+                        val position = position(size, positionAnimation.value)
                         setFloatUniform("size", size.width, size.height)
-                        setColorUniform("color", Color.White.copy(0.15f * progress).toArgb())
+                        setColorUniform("color", Color.White.copy(0.2f * progress).toArgb())
                         setFloatUniform("radius", size.minDimension * 1.5f)
-                        setFloatUniform("position", clampedX, clampedY)
+                        setFloatUniform(
+                            "position",
+                            position.x.fastCoerceIn(0f, size.width),
+                            position.y.fastCoerceIn(0f, size.height)
+                        )
                     }
                     drawRect(ShaderBrush(shader), blendMode = BlendMode.Plus)
-
-                    val trailPos = position(size, trailPositionAnimation.value)
-                    val trailClampedX = trailPos.x.fastCoerceIn(0f, size.width)
-                    val trailClampedY = trailPos.y.fastCoerceIn(0f, size.height)
-                    if (abs(trailClampedX - clampedX) > 1f || abs(trailClampedY - clampedY) > 1f) {
-                        shader.apply {
-                            setFloatUniform("size", size.width, size.height)
-                            setColorUniform("color", Color.White.copy(0.1f * progress).toArgb())
-                            setFloatUniform("radius", size.minDimension * 1.1f)
-                            setFloatUniform("position", trailClampedX, trailClampedY)
-                        }
-                        drawRect(ShaderBrush(shader), blendMode = BlendMode.Plus)
-                    }
                 } else {
-                    drawRect(Color.White.copy(0.25f * progress), blendMode = BlendMode.Plus)
+                    drawRect(Color.White.copy(0.3f * progress), blendMode = BlendMode.Plus)
                 }
             }
             drawContent()
@@ -105,32 +88,50 @@ half4 main(float2 coord) {
         Modifier.pointerInput(animationScope) {
             inspectDragGestures(
                 onDragStart = { down ->
-                    startPosition = down.position
-                    animationScope.launch {
-                        launch { pressProgressAnimation.animateTo(1f, pressProgressAnimationSpec) }
-                        launch { positionAnimation.snapTo(startPosition) }
-                        launch { trailPositionAnimation.snapTo(startPosition) }
-                    }
+                    press(down.position)
                 },
                 onDragEnd = {
-                    animationScope.launch {
-                        launch { pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec) }
-                        launch { positionAnimation.animateTo(startPosition, positionAnimationSpec) }
-                        launch { trailPositionAnimation.animateTo(startPosition, trailAnimationSpec) }
-                    }
+                    release()
                 },
                 onDragCancel = {
-                    animationScope.launch {
-                        launch { pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec) }
-                        launch { positionAnimation.animateTo(startPosition, positionAnimationSpec) }
-                        launch { trailPositionAnimation.animateTo(startPosition, trailAnimationSpec) }
-                    }
+                    release()
                 }
             ) { change, _ ->
-                animationScope.launch {
-                    launch { positionAnimation.snapTo(change.position) }
-                    launch { trailPositionAnimation.animateTo(change.position, trailAnimationSpec) }
-                }
+                animationScope.launch { positionAnimation.snapTo(change.position) }
             }
         }
+
+    fun press(position: Offset) {
+        startPosition = position
+        pressJob?.cancel()
+        pressJob = animationScope.launch {
+            launch { pressProgressAnimation.animateTo(1f, pressProgressAnimationSpec) }
+            launch { positionAnimation.snapTo(startPosition) }
+        }
+    }
+
+    fun pulse() {
+        pressJob?.cancel()
+        pressJob = animationScope.launch {
+            launch {
+                if (pressProgressAnimation.value < 0.82f) {
+                    pressProgressAnimation.snapTo(0.82f)
+                }
+                delay(90L)
+                pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec)
+            }
+            launch { positionAnimation.animateTo(startPosition, positionAnimationSpec) }
+        }
+    }
+
+    fun release() {
+        pressJob?.cancel()
+        pressJob = animationScope.launch {
+            launch {
+                delay(48L)
+                pressProgressAnimation.animateTo(0f, pressProgressAnimationSpec)
+            }
+            launch { positionAnimation.animateTo(startPosition, positionAnimationSpec) }
+        }
+    }
 }

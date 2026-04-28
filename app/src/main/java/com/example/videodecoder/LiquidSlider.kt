@@ -3,6 +3,7 @@ package com.example.videodecoder
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -11,19 +12,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.changedToUpIgnoreConsumed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.LayoutDirection
@@ -54,9 +57,16 @@ fun LiquidSlider(
     modifier: Modifier = Modifier,
     enabled: Boolean = true
 ) {
-    val accentColor = Color(0xFF0091FF)
-    val trackColor = Color(0xFF787880).copy(alpha = if (enabled) 0.36f else 0.18f)
+    val isLightTheme = !isSystemInDarkTheme()
+    val accentColor =
+        if (isLightTheme) Color(0xFF0088FF)
+        else Color(0xFF0091FF)
+    val trackColor =
+        if (isLightTheme) Color(0xFF787878).copy(0.2f)
+        else Color(0xFF787880).copy(0.36f)
+
     val trackBackdrop = rememberLayerBackdrop()
+    val safeRange = if (valueRange.endInclusive <= valueRange.start) 0f..1f else valueRange
 
     BoxWithConstraints(
         modifier
@@ -65,17 +75,19 @@ fun LiquidSlider(
         contentAlignment = Alignment.CenterStart
     ) {
         val trackWidth = constraints.maxWidth.coerceAtLeast(1)
+
         val isLtr = LocalLayoutDirection.current == LayoutDirection.Ltr
         val animationScope = rememberCoroutineScope()
         var didDrag by remember { mutableStateOf(false) }
-        var isDragging by remember { mutableStateOf(false) }
-        val safeRange = if (valueRange.endInclusive <= valueRange.start) 0f..1f else valueRange
+        var isInteracting by remember { mutableStateOf(false) }
+        val currentValue = value().coerceIn(safeRange)
         var dragValue by remember(safeRange.start, safeRange.endInclusive) {
-            mutableFloatStateOf(value().coerceIn(safeRange))
+            mutableFloatStateOf(currentValue)
         }
-        val sliderValue = if (isDragging) dragValue else value().coerceIn(safeRange)
+
         fun valueAt(positionX: Float): Float {
-            val delta = (safeRange.endInclusive - safeRange.start) * (positionX / trackWidth)
+            val x = positionX.fastCoerceIn(0f, trackWidth.toFloat())
+            val delta = (safeRange.endInclusive - safeRange.start) * (x / trackWidth)
             return (if (isLtr) safeRange.start + delta else safeRange.endInclusive - delta)
                 .coerceIn(safeRange)
         }
@@ -83,20 +95,17 @@ fun LiquidSlider(
         val dampedDragAnimation = remember(animationScope, safeRange.start, safeRange.endInclusive) {
             DampedDragAnimation(
                 animationScope = animationScope,
-                initialValue = sliderValue,
+                initialValue = currentValue,
                 valueRange = safeRange,
                 visibilityThreshold = visibilityThreshold,
                 initialScale = 1f,
                 pressedScale = 1.5f,
-                onDragStarted = {
-                    isDragging = true
-                },
+                onDragStarted = {},
                 onDragStopped = {
                     if (didDrag && enabled) {
                         onValueChange(dragValue)
                     }
                     didDrag = false
-                    isDragging = false
                 },
                 onDrag = { _, dragAmount ->
                     if (enabled) {
@@ -112,84 +121,18 @@ fun LiquidSlider(
                 }
             )
         }
-        fun finishDrag(commit: Boolean) {
-            if (commit && enabled) {
-                onValueChange(dragValue)
-            }
-            didDrag = false
-            isDragging = false
-            dampedDragAnimation.release()
-        }
-
-        val latestValue = value().coerceIn(safeRange)
-        LaunchedEffect(dampedDragAnimation, latestValue, enabled) {
-            if (!isDragging && dampedDragAnimation.targetValue != latestValue) {
-                dragValue = latestValue
-                dampedDragAnimation.updateValue(latestValue)
+        LaunchedEffect(dampedDragAnimation, enabled, isInteracting, currentValue) {
+            if (!isInteracting && dampedDragAnimation.targetValue != currentValue) {
+                dragValue = currentValue
+                dampedDragAnimation.updateValue(currentValue)
             }
         }
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(40.dp)
-                .layerBackdrop(trackBackdrop)
-                .pointerInput(animationScope, enabled, trackWidth, safeRange.start, safeRange.endInclusive, isLtr) {
-                    if (enabled) {
-                        awaitEachGesture {
-                            var finished = false
-                            try {
-                                val down = awaitFirstDown(requireUnconsumed = false)
-                                isDragging = true
-                                didDrag = false
-                                dampedDragAnimation.press()
-                                dragValue = valueAt(down.position.x)
-                                dampedDragAnimation.snapToValue(dragValue)
-                                down.consume()
-
-                                var commit = true
-                                while (true) {
-                                    val event = awaitPointerEvent()
-                                    val change = event.changes.firstOrNull { it.id == down.id }
-                                    if (change == null) {
-                                        commit = false
-                                        break
-                                    }
-
-                                    dragValue = valueAt(change.position.x)
-                                    dampedDragAnimation.snapToValue(dragValue)
-
-                                    if (change.changedToUpIgnoreConsumed()) {
-                                        change.consume()
-                                        break
-                                    }
-
-                                    if (change.pressed) {
-                                        if (change.position != change.previousPosition) {
-                                            didDrag = true
-                                        }
-                                        change.consume()
-                                    } else {
-                                        commit = false
-                                        break
-                                    }
-                                }
-                                finishDrag(commit = commit)
-                                finished = true
-                            } finally {
-                                if (!finished && isDragging) {
-                                    finishDrag(commit = false)
-                                }
-                            }
-                        }
-                    }
-                },
-            contentAlignment = Alignment.CenterStart
-        ) {
+        Box(Modifier.layerBackdrop(trackBackdrop)) {
             Box(
                 Modifier
                     .clip(Capsule())
-                    .background(trackColor)
+                    .background(trackColor.copy(alpha = trackColor.alpha * if (enabled) 1f else 0.5f))
                     .height(6.dp)
                     .fillMaxWidth()
             )
@@ -210,6 +153,74 @@ fun LiquidSlider(
                     }
             )
         }
+
+        Box(
+            Modifier
+                .matchParentSize()
+                .pointerInput(enabled, trackWidth, safeRange.start, safeRange.endInclusive, isLtr) {
+                    if (!enabled) return@pointerInput
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        down.consume()
+                        isInteracting = true
+                        didDrag = false
+
+                        val thumbX =
+                            if (isLtr) trackWidth * dampedDragAnimation.progress
+                            else trackWidth * (1f - dampedDragAnimation.progress)
+                        val thumbHitRadius = 28.dp.toPx()
+                        val pressedOnThumb = kotlin.math.abs(down.position.x - thumbX) <= thumbHitRadius
+
+                        var gestureValue =
+                            if (pressedOnThumb) dampedDragAnimation.value.coerceIn(safeRange)
+                            else valueAt(down.position.x)
+                        dragValue = gestureValue
+
+                        dampedDragAnimation.press()
+                        if (pressedOnThumb) {
+                            dampedDragAnimation.snapToValue(gestureValue)
+                        } else {
+                            dampedDragAnimation.updateValue(gestureValue)
+                        }
+
+                        var commit = true
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            val change = event.changes.firstOrNull { it.id == down.id }
+                            if (change == null) {
+                                commit = false
+                                break
+                            }
+
+                            if (change.changedToUpIgnoreConsumed()) {
+                                change.consume()
+                                break
+                            }
+
+                            if (!change.pressed) {
+                                commit = false
+                                break
+                            }
+
+                            val positionChange = change.positionChange()
+                            if (positionChange != Offset.Zero) {
+                                didDrag = true
+                                gestureValue = valueAt(change.position.x)
+                                dragValue = gestureValue
+                                dampedDragAnimation.snapToValue(gestureValue)
+                                change.consume()
+                            }
+                        }
+
+                        if (commit && (didDrag || !pressedOnThumb)) {
+                            onValueChange(gestureValue)
+                        }
+                        isInteracting = false
+                        didDrag = false
+                        dampedDragAnimation.release()
+                    }
+                }
+        )
 
         Box(
             Modifier
@@ -258,7 +269,10 @@ fun LiquidSlider(
                     },
                     innerShadow = {
                         val progress = dampedDragAnimation.pressProgress
-                        InnerShadow(radius = 4.dp * progress, alpha = progress)
+                        InnerShadow(
+                            radius = 4.dp * progress,
+                            alpha = progress
+                        )
                     },
                     layerBlock = {
                         scaleX = dampedDragAnimation.scaleX

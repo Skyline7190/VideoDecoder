@@ -30,6 +30,8 @@ VideoDecoder 是一个基于 **Android + JNI + FFmpeg + OpenGL ES + AAudio** 的
 - Material 3 卡片化 UI（24dp 圆角、语义化状态色、轻量动效）
 - 四区域播放器排版：顶部文本/状态区、视频区、进度条区、按钮控制区
 - Liquid Glass 进度条支持拖拽形变、松手 seek 和拖拽状态稳定释放
+- 选择、解析、播放、暂停四个主按钮恢复 AndroidLiquidGlass 风格的物理拖拽形变、弹性回弹和真实背景折射
+- 倍速 tabs 使用浅色半透明玻璃容器、液态指示器和拖拽切换交互
 
 ---
 
@@ -114,17 +116,17 @@ flowchart TB
 2.  **Liquid Glass 交互**：
    - `LiquidControls.kt`：基于 `rememberLayerBackdrop()` 和 `drawBackdrop` 实现液态按钮。
    - `LiquidSlider.kt`：实现液态玻璃进度条，拖拽时直接跟手，松手后提交 seek。
-   - `DampedDragAnimation.kt`：管理进度条拖拽形变、按压/释放动画和稳定释放。
-   - `InteractiveHighlight.kt`：实现按压高光、拖拽尾迹和弹性形变（非线性位移 `tanh`、方向相关缩放 `atan2/cos/sin`）。
+   - `DampedDragAnimation.kt`：管理拖拽形变、按压/释放动画、旧 value 动画取消和长时间拖拽稳定释放。
+   - `InteractiveHighlight.kt`：实现按压高光和弹性形变（非线性位移 `tanh`、方向相关缩放 `atan2/cos/sin`）。
    - `DragGestureInspector.kt`：提供流畅的手势解析。
 
 3.  **视觉统一**：
    - **全局配色**：`colors.xml` 和 `themes.xml` 引入 `liquid_*` 调色板，统一背景、卡片、描边。
    - **全页风格**：页面背景使用 AndroidLiquidGlass 的 `wallpaper_light.webp` 壁纸，作为根布局/window background 渲染，配合 edge-to-edge 窗口实现全屏沉浸。
-   - **呼吸脉冲**：Active 按钮带有 `rememberInfiniteTransition` 驱动的微弱呼吸动效，增强”活着的玻璃”质感。
+   - **真实背景取样**：Compose 控制层会在视频区域之外记录同一张壁纸到 `LayerBackdrop`，让按钮和面板折射真实背景像素，而不是透明层。
    - **状态联动**：播放状态（PLAYING/PAUSED/IDLE/READY）精准映射到 `LiquidGlassHelper` 的 `isPlayingState` 和 `selectedSpeedState`，动态高亮当前激活按钮。
    - **透明玻璃按钮**：选择、解析、播放/暂停、倍速按钮统一为透明液态玻璃质感，避免蓝/红色块破坏播放器观感。
-   - **激活态蓝字**：选中按钮和倍速标签文字使用蓝色 `#0091FF`。
+   - **激活态蓝字**：解析中/播放中/暂停态按钮和倍速状态文字使用蓝色 `#0091FF` / 系统蓝变体。
 
 4.  **Ripple 涟漪效果** (`Ripple.kt`)
    - 自定义 `glassRipple()`，降低涟漪透明度（pressed 0.1, dragged 0.16, hovered 0.08），更贴合液态玻璃质感。
@@ -132,7 +134,8 @@ flowchart TB
 
 5.  **视觉参数对齐 AndroidLiquidGlass Catalog**
    - `LiquidSlider.kt`：滑块 40×24dp，轨道 6dp，阴影透明度 0.05f。
-   - `SpeedBottomTabs`：容器高度 64dp，pressedScale 78/56，指示器高光/阴影透明度跟随 `progress`，指示器 `onDrawSurface` 使用深色主题色（`White.copy(0.1f)`）。
+   - `LiquidButton`：恢复 catalog 风格的 `InteractiveHighlight.gestureModifier` 链路，由手指位置驱动非线性位移、拉伸和回弹。
+   - `SpeedBottomTabs`：容器高度 64dp，pressedScale 78/56，指示器高光/阴影透明度跟随 `progress`，容器使用浅色半透明玻璃和轻微 Plus 高光。
    - 隐藏标签层保留 `layerBackdrop` 捕获并应用 `ColorFilter.tint(accentColor)` 供指示器 backdrop 使用。
 
 6.  **Edge-to-Edge 全屏窗口**
@@ -193,17 +196,17 @@ app/
    - 加速度计以 ~60Hz 频率更新，此前每帧都会触发整个 overlay 重组。
    - 增加 2° 角度阈值过滤微小变化；内部平滑持续进行，但 Compose 状态仅在朝向发生有意义的变化时才更新。
 
-2. **呼吸动画提升至 overlay 级别** (`LiquidControls.kt`)
-   - 此前每个 `LiquidButton` 各自创建 `rememberInfiniteTransition` 用于呼吸脉冲（4+ 个无限动画同时运行）。
-   - 在 overlay 级别运行单一 `rememberInfiniteTransition`，通过 `LocalBreathingScale` CompositionLocal 分发给所有按钮。
+2. **拖拽动画取消与稳定释放** (`DampedDragAnimation.kt`)
+   - 长时间拖拽进度条时，旧 value 动画可能积压并和最新手势目标抢控制权。
+   - 当前动画控制器会取消旧 value/press 任务，只保留最新拖拽目标，并在松手时稳定释放。
 
-3. **不可见 backdrop 层精简** (`LiquidControls.kt` — `SpeedBottomTabs`)
-   - alpha=0 的隐藏 Row 仍在运行完整的 `vibrancy()` + `blur(8dp)` + `lens(24dp, 24dp)` 效果，GPU 全力计算但无可见输出。
-   - 移除效果和高光修饰符，仅保留 `layerBackdrop` 捕获供组合指示器 backdrop 使用。
+3. **Backdrop 来源约束** (`LiquidControls.kt`)
+   - AndroidLiquidGlass 的 blur/lens 需要 Compose 内录制的 backdrop source；只有 XML 背景时无法获得真实折射采样。
+   - 当前 overlay 会在视频区域之外把 `wallpaper_light.webp` 记录到 `LayerBackdrop`，既提供真实背景像素，又不覆盖 native 视频画面。
 
-4. **冗余 shader pass 跳过** (`InteractiveHighlight.kt`)
-   - 径向高光 shader 每帧绘制两个 pass（主光 + 拖尾光），即使拖尾弹簧已收敛到主位置。
-   - 当两个位置差 < 1px 时跳过拖尾 pass，每帧节省一次 `RuntimeShader` 计算和绘制调用。
+4. **单 pass 按压高光** (`InteractiveHighlight.kt`)
+   - 按钮高光使用一次由真实手势位置驱动的径向 shader pass。
+   - 同一状态同时驱动非线性位移、方向拉伸和松手回弹，避免再叠加额外装饰性拖尾动画。
 
 ---
 
@@ -445,7 +448,10 @@ flowchart LR
 - 视频显示链路从可见 `SurfaceView` 调整为 `TextureView`，并同步 `SurfaceTexture` buffer 尺寸，减少控件尺寸与 native window 尺寸不一致的问题。
 - OpenGL viewport 从完整显示的 `AspectFit` 调整为铺满窗口的 `AspectFill / CenterCrop`，保持比例的同时减少大面积黑边。
 - 创建 `EGLSurface` 前先调用 `ANativeWindow_setBuffersGeometry`，避免 EGL 初始化时拿到旧窗口尺寸。
-- `LiquidSlider` 拖拽过程改为直接 `snapToValue` 跟手，松手只提交一次 `seekToPosition(ms)`，避免动画积压导致进度条偶发卡住。
+- `LiquidSlider` 使用 40dp 触控热区，拖拽时冻结外部播放进度同步，取消旧 value 动画并只保留最新位置，避免长时间拖拽时进度条卡住。
+- 选择、解析、播放、暂停按钮恢复 AndroidLiquidGlass 的物理拖拽链路：手指位置高光、非线性位移、方向拉伸和松手弹性回弹。
+- Compose 控制层在视频窗口之外记录壁纸到 `LayerBackdrop`，让 Liquid Glass 按钮和面板获得真实背景像素用于 blur/lens 折射。
+- 倍速 tabs 改为浅色半透明玻璃容器和蓝色轻量指示器，避免暗灰容器破坏整体壁纸质感。
 - `DampedDragAnimation` 的 `press/release` 使用同一个 `pressJob`，新的释放会取消旧的按压动画，避免松手后仍停留在拖拽态。
 - `PacketQueue::push()` 在队列满等待时会周期性检查 `isSeeking`，seek 请求可以打断等待，降低拖拽 seek 后需要再次点击才恢复的概率。
 - Render 线程初始化失败时会设置停止标志、唤醒 packet 队列并终止 `FrameQueue`，避免 Video Decode 线程卡死在 `FrameQueue::push()`。
@@ -478,12 +484,14 @@ flowchart LR
 - **顶部信息区**：顶部文本框也改为 Liquid Glass 面板，状态文案通过 `LiquidGlassHelper.setStatusText()` 与 native/Java 状态同步。
 - **进度条贴近视频**：进度条区域位于视频下方，按钮区紧跟进度条，形成连续播放器控制簇。
 - **统一透明玻璃按钮**：选择、解析、播放/暂停、倍速按钮共享同一玻璃 backdrop，取消突兀的蓝色/红色按钮配色。
-- **激活态蓝字**：选中按钮和倍速标签文字使用蓝色 `#0091FF`。
+- **主按钮物理交互**：选择、解析、播放、暂停保留 AndroidLiquidGlass 的按住拖拽、拉伸和回弹模型，短点击 pulse 只作为兜底反馈。
+- **真实 backdrop 取样**：Compose 在视频窗口外记录壁纸背景，玻璃控件的 blur/lens 能散射真实背景像素。
+- **激活态蓝字**：解析中/播放中/暂停态按钮和倍速标签文字使用蓝色 `#0091FF`。
 - **卡片语言**：主要信息区统一为 24dp 圆角卡片，使用 `surfaceContainer*` 分层而不是重阴影。
 - **状态语义色**：引入四态色并做浅色/深色资源分离，避免在布局中硬编码颜色。
 - **状态联动**：`MainActivity` 会根据播放状态映射并联动更新 chip、卡片底色、解码按钮、播放/暂停/倍速/选择视频按钮，以及 SeekBar 强调色。
-- **动效节奏**：页面首屏采用 staggered `fade + slight slide` 入场；状态切换使用 180ms fade；状态文案（如”已选择视频””正在解析视频””解析结束”）采用统一 fade + text swap。
-- **视觉参数对齐**：滑块 40×24dp、轨道 6dp；倍速容器 64dp、指示器透明度跟随按压进度。
+- **动效节奏**：页面首屏采用 staggered `fade + slight slide` 入场；状态切换使用 180ms fade；拖拽控件使用弹簧释放和稳定清理。
+- **视觉参数对齐**：滑块 40×24dp、轨道 6dp；倍速容器 64dp、指示器透明度跟随按压进度，并使用浅色玻璃表面。
 - **自定义涟漪**：`glassRipple()` 降低透明度，更贴合液态玻璃质感。
 
 ### 状态映射
