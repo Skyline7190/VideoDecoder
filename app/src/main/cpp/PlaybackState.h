@@ -6,7 +6,9 @@
 #define VIDEODECODER_PLAYBACKSTATE_H
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <mutex>
 
 struct PlaybackState {
     std::atomic<bool> isSeeking{false};
@@ -22,6 +24,9 @@ struct PlaybackState {
     std::atomic<int64_t> currentPositionMs{0};
     std::atomic<float> playbackSpeed{1.0f};
 
+    std::mutex seekMutex;
+    std::condition_variable seekCv;
+
     void resetForNewPlayback() {
         isSeeking.store(false);
         seekApplied.store(false);
@@ -35,6 +40,18 @@ struct PlaybackState {
         durationMs.store(0);
         currentPositionMs.store(0);
         playbackSpeed.store(1.0f);
+    }
+
+    void notifySeekApplied() {
+        std::lock_guard<std::mutex> lock(seekMutex);
+        seekCv.notify_all();
+    }
+
+    bool waitForSeekApplied(int timeoutMs = 1000) {
+        std::unique_lock<std::mutex> lock(seekMutex);
+        return seekCv.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] {
+            return seekApplied.load() || stopRequested.load();
+        });
     }
 };
 

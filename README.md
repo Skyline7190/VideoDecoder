@@ -419,6 +419,30 @@ This coupling has been removed:
 
 ---
 
+## Compose Sole UI Layer Migration
+
+Following the legacy UI decoupling, the remaining invisible View widgets have been removed to make Compose the true sole UI layer:
+
+- **`activity_main.xml`**: Removed the `header_card` MaterialCardView (containing `header_status_chip`, `preview_status_chip`, and `sample_text` TextViews). A 96dp spacer View is added to maintain the video area positioning expected by the Compose overlay.
+- **`MainActivity.java`**: Removed all remaining invisible View member variables (`tv`, `headerStatusChip`, `previewStatusChip`, `headerCard`, `selectedSpeed`, `entranceInterpolator`). Removed `findViewById` bindings, `setVisibility(INVISIBLE)` calls, and fade animations on invisible views.
+- **State management simplified**: `updateUiStateColorScheme()`, `resolveStateColorScheme()`, `resolveColor()`, and the `StateColorScheme` class have been entirely removed. `setPlaybackUiState()` now only syncs state to Compose via `LiquidGlassHelper`.
+- **`setStatusTextWithFade()`** simplified to a single `LiquidGlassHelper.setStatusText()` call.
+- **`onVideoDecoded()`** no longer calls `tv.append()`; status text is updated through `LiquidGlassHelper`.
+- **Dead code removed**: `startEntranceAnimations()`, `animateEntrance()`, `dpToPx()`, and all associated unused imports (`ColorStateList`, `AccelerateDecelerateInterpolator`, `TextView`, `MaterialCardView`, `ContextCompat`).
+- **Build config**: Removed unused `viewBinding true` from `app/build.gradle`.
+- **Deprecated API**: Added `@SuppressWarnings("deprecation")` to `configureEdgeToEdgeWindow()` for the pre-API-30 `getSystemUiVisibility()` fallback path.
+
+### Seek Synchronization Improvement
+
+The audio decode thread's seek synchronization has been improved from a busy-wait polling pattern to a proper condition variable mechanism:
+
+- **`PlaybackState.h`**: Added `std::mutex seekMutex`, `std::condition_variable seekCv`, `notifySeekApplied()`, and `waitForSeekApplied(timeoutMs)` methods.
+- **`native-lib.cpp`**: The audio decode thread now calls `state->waitForSeekApplied(1000)` instead of sleeping 1ms per loop for up to 1000 iterations. The condition variable also wakes on `stopRequested`, ensuring clean shutdown.
+- **`Demuxer.cpp`**: After setting `seekApplied = true`, calls `state->notifySeekApplied()` to wake waiting threads.
+- **`native-lib.cpp` (render thread)**: The abort handler also calls `notifySeekApplied()` to unblock the audio thread on render failure.
+
+---
+
 ## Recent Stability Improvements
 
 - Render initialization failures set stop flags, wake packet queues, and terminate `FrameQueue`.

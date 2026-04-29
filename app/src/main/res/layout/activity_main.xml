@@ -15,88 +15,9 @@
         android:paddingEnd="16dp"
         android:paddingBottom="260dp">
 
-        <com.google.android.material.card.MaterialCardView
-            android:id="@+id/header_card"
+        <View
             android:layout_width="match_parent"
-            android:layout_height="96dp"
-            android:alpha="0"
-            android:importantForAccessibility="no"
-            app:cardBackgroundColor="#33FFFFFF"
-            app:cardCornerRadius="24dp"
-            app:cardElevation="0dp"
-            app:strokeColor="#55FFFFFF"
-            app:strokeWidth="1dp">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="vertical"
-                android:paddingStart="16dp"
-                android:paddingTop="14dp"
-                android:paddingEnd="16dp"
-                android:paddingBottom="14dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal">
-
-                    <TextView
-                        android:id="@+id/header_status_chip"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/bg_deadliner_chip"
-                        android:fontFamily="sans-serif-medium"
-                        android:paddingStart="9dp"
-                        android:paddingTop="3dp"
-                        android:paddingEnd="9dp"
-                        android:paddingBottom="3dp"
-                        android:text="IDLE"
-                        android:textColor="#FFFFFFFF"
-                        android:textSize="11sp"
-                        android:textStyle="bold" />
-
-                    <TextView
-                        android:id="@+id/preview_status_chip"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginStart="8dp"
-                        android:background="@drawable/bg_deadliner_chip"
-                        android:fontFamily="sans-serif-medium"
-                        android:paddingStart="9dp"
-                        android:paddingTop="3dp"
-                        android:paddingEnd="9dp"
-                        android:paddingBottom="3dp"
-                        android:text="RENDER"
-                        android:textColor="#FFFFFFFF"
-                        android:textSize="11sp"
-                        android:textStyle="bold" />
-                </LinearLayout>
-
-                <TextView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="6dp"
-                    android:fontFamily="sans-serif-medium"
-                    android:text="Video Decoder"
-                    android:textColor="#FFFFFFFF"
-                    android:textSize="22sp"
-                    android:textStyle="bold" />
-
-                <TextView
-                    android:id="@+id/sample_text"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginTop="3dp"
-                    android:ellipsize="end"
-                    android:fontFamily="sans-serif"
-                    android:maxLines="1"
-                    android:text="Native Player"
-                    android:textColor="#DDEAF2FF"
-                    android:textSize="12sp" />
-            </LinearLayout>
-        </com.google.android.material.card.MaterialCardView>
+            android:layout_height="96dp" />
 
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"

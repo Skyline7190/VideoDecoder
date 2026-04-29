@@ -4,7 +4,6 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import android.content.Intent;
-import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.SurfaceTexture;
@@ -22,32 +21,19 @@ import android.view.TextureView;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
-import android.view.animation.AccelerateDecelerateInterpolator;
-import android.widget.TextView;
 import android.widget.Toast;
-import androidx.core.content.ContextCompat;
-import com.google.android.material.card.MaterialCardView;
 import java.io.IOException;
 
 public class MainActivity extends AppCompatActivity {
     /* ----------------- 常量声明 ----------------- */
     private static final String TAG = "VideoDecoderMainActivity";
     /* ----------------- 成员变量 ----------------- */
-    private TextView tv;
     private Uri videoUri;
     private volatile PlaybackUiPolicy.PlaybackUiState playbackUiState = PlaybackUiPolicy.PlaybackUiState.IDLE;
     private Thread decodeThread;
-
-    private float selectedSpeed = 1.0f;
-
-    private TextView headerStatusChip;
-    private TextView previewStatusChip;
-    private MaterialCardView headerCard;
     private volatile boolean isSurfaceReady = false;
     private volatile boolean isDestroyed = false;
     private Surface renderSurface;
-    private final AccelerateDecelerateInterpolator entranceInterpolator =
-            new AccelerateDecelerateInterpolator();
     private final ActivityResultLauncher<String[]> videoPickerLauncher =
             registerForActivityResult(new ActivityResultContracts.OpenDocument(), this::handlePickedVideo);
     private final Handler progressHandler = new Handler(Looper.getMainLooper());
@@ -97,26 +83,10 @@ public class MainActivity extends AppCompatActivity {
 
         progressHandler.post(progressUpdater);
 
-        headerStatusChip = findViewById(R.id.header_status_chip);
-        previewStatusChip = findViewById(R.id.preview_status_chip);
-        headerCard = findViewById(R.id.header_card);
         configureVideoStage();
         configureVideoSurface();
 
-
-
-
-
-        tv = findViewById(R.id.sample_text);
-        if (headerCard != null) {
-            headerCard.setVisibility(View.INVISIBLE);
-        }
-        if (previewStatusChip != null) {
-            previewStatusChip.setVisibility(View.INVISIBLE);
-        }
-
         String initialStatus = stringFromJNI();
-        tv.setText(initialStatus);
         LiquidGlassHelper.INSTANCE.setStatusText(initialStatus);
 
         setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.IDLE);
@@ -125,7 +95,7 @@ public class MainActivity extends AppCompatActivity {
         androidx.compose.ui.platform.ComposeView composeView = findViewById(R.id.compose_view);
         if (composeView != null) {
             LiquidGlassHelper.INSTANCE.setup(composeView);
-            LiquidGlassHelper.INSTANCE.setSelectedSpeed(selectedSpeed);
+            LiquidGlassHelper.INSTANCE.setSelectedSpeed(1.0f);
             LiquidGlassHelper.INSTANCE.setActions(new LiquidActions() {
                 @Override
                 public void onSelect() {
@@ -181,6 +151,7 @@ public class MainActivity extends AppCompatActivity {
     }
     // 新增native方法声明
 
+    @SuppressWarnings("deprecation")
     private void configureEdgeToEdgeWindow() {
         Window window = getWindow();
         window.setStatusBarColor(Color.TRANSPARENT);
@@ -467,35 +438,9 @@ public class MainActivity extends AppCompatActivity {
             Toast.makeText(this, "请先开始解析视频", Toast.LENGTH_SHORT).show();
             return;
         }
-        selectedSpeed = speed;
         LiquidGlassHelper.INSTANCE.setSelectedSpeed(speed);
         setPlaybackSpeed(PlaybackInputPolicy.sanitizeSpeed(speed));
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show();
-    }
-
-    private void startEntranceAnimations() {
-        animateEntrance(findViewById(R.id.header_card), 0L, 380L, 14f);
-    }
-
-    private void animateEntrance(View view, long delayMs, long durationMs, float offsetDp) {
-        if (view == null) {
-            return;
-        }
-
-        float targetAlpha = view.getAlpha();
-        view.setAlpha(0f);
-        view.setTranslationY(dpToPx(offsetDp));
-        view.animate()
-                .alpha(targetAlpha)
-                .translationY(0f)
-                .setStartDelay(delayMs)
-                .setDuration(durationMs)
-                .setInterpolator(entranceInterpolator)
-                .start();
-    }
-
-    private float dpToPx(float dp) {
-        return dp * getResources().getDisplayMetrics().density;
     }
 
     private void setStatusTextWithFade(String text) {
@@ -503,26 +448,6 @@ public class MainActivity extends AppCompatActivity {
             text = "";
         }
         LiquidGlassHelper.INSTANCE.setStatusText(text);
-
-        if (tv == null) {
-            return;
-        }
-
-        tv.animate().cancel();
-        String nextText = text;
-        tv.animate()
-                .alpha(0f)
-                .setDuration(90L)
-                .setInterpolator(entranceInterpolator)
-                .withEndAction(() -> {
-                    tv.setText(nextText);
-                    tv.animate()
-                            .alpha(1f)
-                            .setDuration(90L)
-                            .setInterpolator(entranceInterpolator)
-                            .start();
-                })
-                .start();
     }
 
     private void setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState state) {
@@ -530,110 +455,16 @@ public class MainActivity extends AppCompatActivity {
         runOnUiThread(() -> {
             LiquidGlassHelper.INSTANCE.setPlaying(state == PlaybackUiPolicy.PlaybackUiState.PLAYING);
             LiquidGlassHelper.INSTANCE.setPlaybackStateLabel(state.name());
-            updateUiStateColorScheme(state);
         });
-    }
-
-    private void updateUiStateColorScheme(PlaybackUiPolicy.PlaybackUiState state) {
-        StateColorScheme scheme = resolveStateColorScheme(state);
-
-        if (headerStatusChip != null) {
-            headerStatusChip.setText(scheme.label);
-            headerStatusChip.setBackgroundTintList(ColorStateList.valueOf(resolveColor(scheme.chipBackgroundColorRes)));
-            headerStatusChip.setTextColor(resolveColor(scheme.chipTextColorRes));
-        }
-
-        if (previewStatusChip != null) {
-            previewStatusChip.setText(scheme.label);
-            previewStatusChip.setBackgroundTintList(ColorStateList.valueOf(resolveColor(scheme.chipBackgroundColorRes)));
-            previewStatusChip.setTextColor(resolveColor(scheme.chipTextColorRes));
-        }
-
-        if (headerCard != null) {
-            headerCard.setCardBackgroundColor(0x33FFFFFF);
-        }
-    }
-
-    private StateColorScheme resolveStateColorScheme(PlaybackUiPolicy.PlaybackUiState state) {
-        switch (state) {
-            case PLAYING:
-                return new StateColorScheme(
-                        "UNDERGO",
-                        R.color.liquid_state_playing_chip_bg,
-                        R.color.liquid_state_playing_chip_text,
-                        R.color.liquid_state_playing_card_bg,
-                        R.color.liquid_state_playing_button_bg,
-                        R.color.liquid_state_playing_button_text
-                );
-            case PAUSED:
-                return new StateColorScheme(
-                        "NEAR",
-                        R.color.liquid_state_paused_chip_bg,
-                        R.color.liquid_state_paused_chip_text,
-                        R.color.liquid_state_paused_card_bg,
-                        R.color.liquid_state_paused_button_bg,
-                        R.color.liquid_state_paused_button_text
-                );
-            case IDLE:
-                return new StateColorScheme(
-                        "PASSED",
-                        R.color.liquid_state_idle_chip_bg,
-                        R.color.liquid_state_idle_chip_text,
-                        R.color.liquid_state_idle_card_bg,
-                        R.color.liquid_state_idle_button_bg,
-                        R.color.liquid_state_idle_button_text
-                );
-            case READY:
-            default:
-                return new StateColorScheme(
-                        "COMPLETED",
-                        R.color.liquid_state_ready_chip_bg,
-                        R.color.liquid_state_ready_chip_text,
-                        R.color.liquid_state_ready_card_bg,
-                        R.color.liquid_state_ready_button_bg,
-                        R.color.liquid_state_ready_button_text
-                );
-        }
-    }
-
-    private int resolveColor(int colorResId) {
-        return ContextCompat.getColor(this, colorResId);
-    }
-
-    private static final class StateColorScheme {
-        final String label;
-        final int chipBackgroundColorRes;
-        final int chipTextColorRes;
-        final int cardBackgroundColorRes;
-        final int buttonBackgroundColorRes;
-        final int buttonTextColorRes;
-
-        StateColorScheme(
-                String label,
-                int chipBackgroundColorRes,
-                int chipTextColorRes,
-                int cardBackgroundColorRes,
-                int buttonBackgroundColorRes,
-                int buttonTextColorRes
-        ) {
-            this.label = label;
-            this.chipBackgroundColorRes = chipBackgroundColorRes;
-            this.chipTextColorRes = chipTextColorRes;
-            this.cardBackgroundColorRes = cardBackgroundColorRes;
-            this.buttonBackgroundColorRes = buttonBackgroundColorRes;
-            this.buttonTextColorRes = buttonTextColorRes;
-        }
     }
 
     /* ----------------- 回调方法 ----------------- */
     public void onVideoDecoded(final String result) {
         runOnUiThread(() -> {
             if (result != null && !result.isEmpty()) {
-                tv.append("\n" + result);
                 LiquidGlassHelper.INSTANCE.setStatusText(result);
             }
-            // 添加YUV文件路径显示
-            if(result != null && result.endsWith(".yuv")) {
+            if (result != null && result.endsWith(".yuv")) {
                 Toast.makeText(this, "YUV文件已生成: " + result, Toast.LENGTH_LONG).show();
             }
         });

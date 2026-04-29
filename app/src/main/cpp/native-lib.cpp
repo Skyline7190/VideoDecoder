@@ -371,24 +371,16 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                                                  0, nullptr);
         swr_init(swr_ctx);
 
-        int seekWaitLoops = 0;
         while (true) {
             if (state->stopRequested.load()) {
                 break;
             }
             if (state->isSeeking.load()) {
                 if (!state->seekApplied.load()) {
-                    if (seekWaitLoops < 1000) {
-                        seekWaitLoops++;
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                        continue;
+                    state->waitForSeekApplied(1000);
+                    if (!state->seekApplied.load()) {
+                        LOGD("Seek wait timed out, forcing queue/decoder cleanup");
                     }
-                    LOGD("Seek wait timed out, forcing queue/decoder cleanup");
-                } else {
-                    seekWaitLoops = 0;
-                }
-                if (!state->seekApplied.load()) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
                 // 1. 清空所有的旧数据队列
                 video_packet_queue.clear();
@@ -423,7 +415,6 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
                 // 结束 Seek 状态，恢复正常播放
                 state->seekApplied.store(false);
                 state->isSeeking.store(false);
-                seekWaitLoops = 0;
                 continue;
             }
 
@@ -522,6 +513,7 @@ Java_com_example_videodecoder_MainActivity_decodeVideo(JNIEnv *env, jobject thiz
         auto abortRender = [&](const char* message) {
             LOGE("%s", message);
             state->stopRequested.store(true);
+            state->notifySeekApplied();
             video_packet_queue.notifyAll();
             audio_packet_queue.notifyAll();
             frameQueue.terminate();
@@ -754,6 +746,7 @@ Java_com_example_videodecoder_MainActivity_nativeReleaseAudio(JNIEnv*, jobject) 
     state->isSeeking.store(false);
     state->seekApplied.store(false);
     state->paused.store(false);
+    state->notifySeekApplied();
 }
 
 

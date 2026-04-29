@@ -27,6 +27,7 @@ void Demuxer::demux(AVFormatContext* fmt_ctx,
                 LOGD("Seek failed at %lld ms", static_cast<long long>(target_pts_ms));
             }
             state.seekApplied.store(true);
+            state.notifySeekApplied();
             av_packet_unref(pkt);
             continue;
         }

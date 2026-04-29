@@ -438,6 +438,29 @@ flowchart LR
 - **移除的死代码**：`applyButtonTint()`、`applyControlFade()`、`applyViewFade()`、`updateTimeText()` 及相关成员变量（`hasUiStateApplied`、`isSeeking`、`seekBar` 等）。
 - **新增方法**：`startDecode()` 将此前嵌套在隐藏解码按钮点击监听器中的解码编排逻辑提取为独立方法。
 
+---
+
+## Compose 成为唯一 UI 层
+
+在 Legacy UI 解耦之后，剩余的不可见 View 控件也已移除，Compose 现在是真正的唯一 UI 层：
+
+- **`activity_main.xml`**：移除了 `header_card` MaterialCardView（包含 `header_status_chip`、`preview_status_chip` 和 `sample_text` TextView）。添加了 96dp 的占位 View 以维持 Compose overlay 期望的视频区域定位。
+- **`MainActivity.java`**：移除了所有剩余的不可见 View 成员变量（`tv`、`headerStatusChip`、`previewStatusChip`、`headerCard`、`selectedSpeed`、`entranceInterpolator`）。移除了 `findViewById` 绑定、`setVisibility(INVISIBLE)` 调用和不可见 view 的 fade 动画。
+- **状态管理简化**：`updateUiStateColorScheme()`、`resolveStateColorScheme()`、`resolveColor()` 和 `StateColorScheme` 类已完全移除。`setPlaybackUiState()` 现在仅通过 `LiquidGlassHelper` 同步状态到 Compose。
+- **`setStatusTextWithFade()`** 简化为单个 `LiquidGlassHelper.setStatusText()` 调用。
+- **`onVideoDecoded()`** 不再调用 `tv.append()`；状态文本通过 `LiquidGlassHelper` 更新。
+- **移除的死代码**：`startEntranceAnimations()`、`animateEntrance()`、`dpToPx()` 及所有相关未使用 import（`ColorStateList`、`AccelerateDecelerateInterpolator`、`TextView`、`MaterialCardView`、`ContextCompat`）。
+- **构建配置**：移除了 `app/build.gradle` 中未使用的 `viewBinding true`。
+- **废弃 API**：为 `configureEdgeToEdgeWindow()` 的 pre-API-30 `getSystemUiVisibility()` 回退路径添加了 `@SuppressWarnings("deprecation")`。
+
+### Seek 同步改进
+
+音频解码线程的 seek 同步已从 busy-wait 轮询模式改进为条件变量机制：
+
+- **`PlaybackState.h`**：新增 `std::mutex seekMutex`、`std::condition_variable seekCv`、`notifySeekApplied()` 和 `waitForSeekApplied(timeoutMs)` 方法。
+- **`native-lib.cpp`**：音频解码线程现在调用 `state->waitForSeekApplied(1000)` 而非每 1ms 循环 sleep 最多 1000 次。条件变量在 `stopRequested` 时也会唤醒，确保干净关闭。
+- **`Demuxer.cpp`**：设置 `seekApplied = true` 后调用 `state->notifySeekApplied()` 唤醒等待线程。
+- **`native-lib.cpp`（render 线程）**：abort 处理器也调用 `notifySeekApplied()` 以在渲染失败时解除音频线程阻塞。
 
 ---
 
