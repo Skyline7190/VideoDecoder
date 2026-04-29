@@ -28,3 +28,6 @@ Thumbs.db
 /.github/workflows/
 /.kotlin/errors/
 /.settings/
+
+# Local docs (agent skills config, run logs)
+docs/
