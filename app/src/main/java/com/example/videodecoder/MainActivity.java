@@ -23,16 +23,11 @@ import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.animation.AccelerateDecelerateInterpolator;
-import android.widget.Button;
-import android.widget.LinearLayout;
-import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.core.content.ContextCompat;
-import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
 import java.io.IOException;
-import java.util.Locale;
 
 public class MainActivity extends AppCompatActivity {
     /* ----------------- 常量声明 ----------------- */
@@ -43,31 +38,14 @@ public class MainActivity extends AppCompatActivity {
     private volatile PlaybackUiPolicy.PlaybackUiState playbackUiState = PlaybackUiPolicy.PlaybackUiState.IDLE;
     private Thread decodeThread;
 
-    private Button selectVideoButton;
-    private Button playButton;
-    private Button pauseButton;
-    private Button speed05Button;
-    private Button speed1Button;
-    private Button speed2Button;
-    private Button speed3Button;
-    private Button decodeVideoButton;
     private float selectedSpeed = 1.0f;
-    private SeekBar seekBar;
-    //
 
-    private TextView currentTimeText;
-    private TextView totalTimeText;
     private TextView headerStatusChip;
     private TextView previewStatusChip;
     private MaterialCardView headerCard;
-    private MaterialCardView actionCard;
-    private MaterialButton decodeButton;
-    private LinearLayout speedLayout;
-    private boolean isSeeking = false;
     private volatile boolean isSurfaceReady = false;
     private volatile boolean isDestroyed = false;
     private Surface renderSurface;
-    private boolean hasUiStateApplied = false;
     private final AccelerateDecelerateInterpolator entranceInterpolator =
             new AccelerateDecelerateInterpolator();
     private final ActivityResultLauncher<String[]> videoPickerLauncher =
@@ -117,58 +95,11 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         applySystemBarInsets();
 
-        // 初始化SeekBar
-        seekBar = findViewById(R.id.seek_bar);
-        currentTimeText = findViewById(R.id.current_time_text);
-        totalTimeText = findViewById(R.id.total_time_text);
-        updateTimeText(0, 0);
         progressHandler.post(progressUpdater);
-        // 设置SeekBar监听
-        seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser) {
-                    updateTimeText(progress, Math.max(seekBar.getMax(), progress));
-                }
-            }
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-                isSeeking = true;
-            }
 
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-                if (isDecodeRunning()) {
-                    seekToPosition(seekBar.getProgress());
-                }
-                isSeeking = false;
-            }
-        });
-
-        speed05Button = findViewById(R.id.speed_05);
-        speed1Button = findViewById(R.id.speed_1);
-        speed2Button = findViewById(R.id.speed_2);
-        speed3Button = findViewById(R.id.speed_3);
         headerStatusChip = findViewById(R.id.header_status_chip);
         previewStatusChip = findViewById(R.id.preview_status_chip);
         headerCard = findViewById(R.id.header_card);
-        actionCard = findViewById(R.id.action_card);
-        speedLayout = findViewById(R.id.speed_layout);
-
-
-
-        speed05Button.setOnClickListener(v -> {
-            applyPlaybackSpeed(0.5f, "播放速度设置为0.5倍");
-        });
-        speed1Button.setOnClickListener(v -> {
-            applyPlaybackSpeed(1.0f, "播放速度设置为1倍");
-        });
-        speed2Button.setOnClickListener(v -> {
-            applyPlaybackSpeed(2.0f, "播放速度设置为2倍");
-        });
-        speed3Button.setOnClickListener(v -> {
-            applyPlaybackSpeed(3.0f, "播放速度设置为3倍");
-        });
         configureVideoStage();
         configureVideoSurface();
 
@@ -183,95 +114,14 @@ public class MainActivity extends AppCompatActivity {
         if (previewStatusChip != null) {
             previewStatusChip.setVisibility(View.INVISIBLE);
         }
-        selectVideoButton = findViewById(R.id.select_video_button);
-        decodeVideoButton = findViewById(R.id.decode_video_button);
-        decodeButton = findViewById(R.id.decode_video_button);
-
-        playButton = findViewById(R.id.play_button);
-        pauseButton = findViewById(R.id.pause_button);
-
-        playButton.setOnClickListener(v -> {
-            if (!isDecodeRunning()) {
-                Toast.makeText(this, "请先开始解析视频", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            if (playbackUiState == PlaybackUiPolicy.PlaybackUiState.PAUSED) {
-                resumeDecoding();
-                setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PLAYING);
-                Toast.makeText(this, "继续播放", Toast.LENGTH_SHORT).show();
-            }
-        });
-
-        pauseButton.setOnClickListener(v -> {
-            if (!isDecodeRunning()) {
-                Toast.makeText(this, "当前无可暂停的播放", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            if (playbackUiState == PlaybackUiPolicy.PlaybackUiState.PLAYING) {
-                pauseDecoding();
-                setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PAUSED);
-                Toast.makeText(this, "暂停播放", Toast.LENGTH_SHORT).show();
-            }
-        });
 
         String initialStatus = stringFromJNI();
         tv.setText(initialStatus);
         LiquidGlassHelper.INSTANCE.setStatusText(initialStatus);
-        // 监听按钮点击事件
-        selectVideoButton.setOnClickListener(v -> pickVideo());
-
-        decodeVideoButton.setOnClickListener(v -> {
-            if (decodeThread != null && decodeThread.isAlive()) {
-                Toast.makeText(this, "正在解析中，请稍候", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            if (!isSurfaceReady) {
-                Toast.makeText(this, "渲染界面尚未就绪，请稍后重试", Toast.LENGTH_SHORT).show();
-                return;
-            }
-            if (videoUri != null) {
-                final Uri selectedUri = videoUri;
-                final boolean[] decodeFailed = {false};
-                setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PLAYING);
-                decodeThread = new Thread(() -> {
-                    runOnUiThread(() -> setStatusTextWithFade("正在解析视频..."));
-                    try {
-                        try (ParcelFileDescriptor videoFd = openVideoFileDescriptor(selectedUri)) {
-                            decodeVideo("fd:" + videoFd.getFd(), null);
-                        }
-                    } catch (IOException e) {
-                        decodeFailed[0] = true;
-                        Log.e(TAG, "Failed to open selected video file descriptor", e);
-                        runOnUiThread(() -> {
-                            setStatusTextWithFade("无法读取文件");
-                            Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show();
-                        });
-                    } finally {
-                        decodeThread = null;
-                        if (!decodeFailed[0]) {
-                            runOnUiThread(() -> setStatusTextWithFade("解析结束，可重新选择或再次解析"));
-                        }
-                        if (!isSurfaceReady) {
-                            setSurface(null);
-                        }
-                        if (!isDestroyed) {
-                            setPlaybackUiState(videoUri == null
-                                    ? PlaybackUiPolicy.PlaybackUiState.IDLE
-                                    : PlaybackUiPolicy.PlaybackUiState.READY);
-                        }
-                    }
-                }, "video-decode-runner");
-                decodeThread.start();
-            } else {
-                Toast.makeText(this, "请先选择视频文件", Toast.LENGTH_SHORT).show();
-            }
-        });
 
         setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.IDLE);
 
-        startEntranceAnimations();
-
-        // ----------------- 新增：集成Liquid Glass Compose UI -----------------
+        // Compose overlay setup
         androidx.compose.ui.platform.ComposeView composeView = findViewById(R.id.compose_view);
         if (composeView != null) {
             LiquidGlassHelper.INSTANCE.setup(composeView);
@@ -279,30 +129,43 @@ public class MainActivity extends AppCompatActivity {
             LiquidGlassHelper.INSTANCE.setActions(new LiquidActions() {
                 @Override
                 public void onSelect() {
-                    selectVideoButton.performClick();
+                    pickVideo();
                 }
 
                 @Override
                 public void onDecode() {
-                    decodeVideoButton.performClick();
+                    startDecode();
                 }
 
                 @Override
                 public void onPlay() {
-                    playButton.performClick();
+                    if (!isDecodeRunning()) {
+                        Toast.makeText(MainActivity.this, "请先开始解析视频", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (playbackUiState == PlaybackUiPolicy.PlaybackUiState.PAUSED) {
+                        resumeDecoding();
+                        setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PLAYING);
+                        Toast.makeText(MainActivity.this, "继续播放", Toast.LENGTH_SHORT).show();
+                    }
                 }
 
                 @Override
                 public void onPause() {
-                    pauseButton.performClick();
+                    if (!isDecodeRunning()) {
+                        Toast.makeText(MainActivity.this, "当前无可暂停的播放", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    if (playbackUiState == PlaybackUiPolicy.PlaybackUiState.PLAYING) {
+                        pauseDecoding();
+                        setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PAUSED);
+                        Toast.makeText(MainActivity.this, "暂停播放", Toast.LENGTH_SHORT).show();
+                    }
                 }
 
                 @Override
                 public void onSpeed(float speed) {
-                    if (speed == 0.5f) speed05Button.performClick();
-                    else if (speed == 1.0f) speed1Button.performClick();
-                    else if (speed == 2.0f) speed2Button.performClick();
-                    else if (speed == 3.0f) speed3Button.performClick();
+                    applyPlaybackSpeed(speed, "播放速度设置为" + speed + "倍");
                 }
 
                 @Override
@@ -314,7 +177,6 @@ public class MainActivity extends AppCompatActivity {
                 }
             });
         }
-        // ------------------------------------------------------------------
 
     }
     // 新增native方法声明
@@ -503,23 +365,59 @@ public class MainActivity extends AppCompatActivity {
     // 新增方法：更新进度条和时间显示
     public void updateProgress(final int currentPosition, final int duration) {
         runOnUiThread(() -> {
-            if (!isSeeking) {
-                seekBar.setMax(duration);
-                seekBar.setProgress(currentPosition);
-                updateTimeText(currentPosition, duration);
-                LiquidGlassHelper.INSTANCE.setProgress(currentPosition, duration);
-            }
+            LiquidGlassHelper.INSTANCE.setProgress(currentPosition, duration);
         });
-    }
-
-    // 新增方法：格式化时间显示
-    private void updateTimeText(int currentMs, int totalMs) {
-        currentTimeText.setText(PlaybackTimeFormatter.formatTime(currentMs, Locale.getDefault()));
-        totalTimeText.setText(PlaybackTimeFormatter.formatTime(totalMs, Locale.getDefault()));
     }
 
     private void pickVideo() {
         videoPickerLauncher.launch(new String[]{"video/*"});
+    }
+
+    private void startDecode() {
+        if (decodeThread != null && decodeThread.isAlive()) {
+            Toast.makeText(this, "正在解析中，请稍候", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (!isSurfaceReady) {
+            Toast.makeText(this, "渲染界面尚未就绪，请稍后重试", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        if (videoUri == null) {
+            Toast.makeText(this, "请先选择视频文件", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final Uri selectedUri = videoUri;
+        final boolean[] decodeFailed = {false};
+        setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState.PLAYING);
+        decodeThread = new Thread(() -> {
+            runOnUiThread(() -> setStatusTextWithFade("正在解析视频..."));
+            try {
+                try (ParcelFileDescriptor videoFd = openVideoFileDescriptor(selectedUri)) {
+                    decodeVideo("fd:" + videoFd.getFd(), null);
+                }
+            } catch (IOException e) {
+                decodeFailed[0] = true;
+                Log.e(TAG, "Failed to open selected video file descriptor", e);
+                runOnUiThread(() -> {
+                    setStatusTextWithFade("无法读取文件");
+                    Toast.makeText(this, "无法读取文件", Toast.LENGTH_SHORT).show();
+                });
+            } finally {
+                decodeThread = null;
+                if (!decodeFailed[0]) {
+                    runOnUiThread(() -> setStatusTextWithFade("解析结束，可重新选择或再次解析"));
+                }
+                if (!isSurfaceReady) {
+                    setSurface(null);
+                }
+                if (!isDestroyed) {
+                    setPlaybackUiState(videoUri == null
+                            ? PlaybackUiPolicy.PlaybackUiState.IDLE
+                            : PlaybackUiPolicy.PlaybackUiState.READY);
+                }
+            }
+        }, "video-decode-runner");
+        decodeThread.start();
     }
 
     private void handlePickedVideo(Uri uri) {
@@ -576,34 +474,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void startEntranceAnimations() {
-        View[] cards = {
-                findViewById(R.id.header_card),
-                findViewById(R.id.preview_card),
-                findViewById(R.id.progress_card),
-                findViewById(R.id.speed_card),
-                findViewById(R.id.action_card),
-                findViewById(R.id.status_card)
-        };
-
-        for (int i = 0; i < cards.length; i++) {
-            animateEntrance(cards[i], i * 70L, 380L, 14f);
-        }
-
-        View[] buttons = {
-                speed05Button,
-                speed1Button,
-                speed2Button,
-                speed3Button,
-                playButton,
-                pauseButton,
-                selectVideoButton,
-                decodeVideoButton
-        };
-
-        long buttonBaseDelay = cards.length * 70L;
-        for (int i = 0; i < buttons.length; i++) {
-            animateEntrance(buttons[i], buttonBaseDelay + (i * 45L), 280L, 8f);
-        }
+        animateEntrance(findViewById(R.id.header_card), 0L, 380L, 14f);
     }
 
     private void animateEntrance(View view, long delayMs, long durationMs, float offsetDp) {
@@ -657,36 +528,9 @@ public class MainActivity extends AppCompatActivity {
     private void setPlaybackUiState(PlaybackUiPolicy.PlaybackUiState state) {
         playbackUiState = state;
         runOnUiThread(() -> {
-            
-            // 同步给Liquid Glass UI
             LiquidGlassHelper.INSTANCE.setPlaying(state == PlaybackUiPolicy.PlaybackUiState.PLAYING);
             LiquidGlassHelper.INSTANCE.setPlaybackStateLabel(state.name());
-
-            PlaybackUiPolicy.ControlState controlState = PlaybackUiPolicy.resolve(state);
             updateUiStateColorScheme(state);
-            if (decodeVideoButton != null) {
-                applyControlFade(decodeVideoButton, controlState.decodeEnabled, 0.45f);
-                decodeVideoButton.setText(controlState.decodeText);
-            }
-            if (playButton != null) {
-                applyControlFade(playButton, controlState.playEnabled, 0.45f);
-            }
-            if (pauseButton != null) {
-                applyControlFade(pauseButton, controlState.pauseEnabled, 0.45f);
-            }
-
-            if (speed05Button != null) applyControlFade(speed05Button, controlState.speedEnabled, 0.45f);
-            if (speed1Button != null) applyControlFade(speed1Button, controlState.speedEnabled, 0.45f);
-            if (speed2Button != null) applyControlFade(speed2Button, controlState.speedEnabled, 0.45f);
-            if (speed3Button != null) applyControlFade(speed3Button, controlState.speedEnabled, 0.45f);
-            if (seekBar != null) applyControlFade(seekBar, controlState.seekEnabled, 0.45f);
-
-            View progressCard = findViewById(R.id.progress_card);
-            View speedCard = findViewById(R.id.speed_card);
-            applyViewFade(progressCard, controlState.seekEnabled ? 1f : 0.62f);
-            applyViewFade(speedCard, controlState.speedEnabled ? 1f : 0.62f);
-
-            hasUiStateApplied = true;
         });
     }
 
@@ -707,30 +551,6 @@ public class MainActivity extends AppCompatActivity {
 
         if (headerCard != null) {
             headerCard.setCardBackgroundColor(0x33FFFFFF);
-        }
-
-        if (actionCard != null) {
-            actionCard.setCardBackgroundColor(resolveColor(scheme.cardBackgroundColorRes));
-        }
-
-        if (decodeButton != null) {
-            applyButtonTint(decodeButton, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
-        }
-
-        applyButtonTint(playButton, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
-        applyButtonTint(pauseButton, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
-        applyButtonTint(selectVideoButton, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
-        applyButtonTint(speed05Button, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
-        applyButtonTint(speed1Button, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
-        applyButtonTint(speed2Button, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
-        applyButtonTint(speed3Button, scheme.buttonBackgroundColorRes, scheme.buttonTextColorRes);
-
-        if (speedLayout != null) {
-            int accent = resolveColor(scheme.buttonBackgroundColorRes);
-            if (seekBar != null) {
-                seekBar.setProgressTintList(ColorStateList.valueOf(accent));
-                seekBar.setThumbTintList(ColorStateList.valueOf(accent));
-            }
         }
     }
 
@@ -780,15 +600,6 @@ public class MainActivity extends AppCompatActivity {
         return ContextCompat.getColor(this, colorResId);
     }
 
-    private void applyButtonTint(Button button, int backgroundColorRes, int textColorRes) {
-        if (button == null) {
-            return;
-        }
-
-        button.setBackgroundTintList(ColorStateList.valueOf(resolveColor(backgroundColorRes)));
-        button.setTextColor(resolveColor(textColorRes));
-    }
-
     private static final class StateColorScheme {
         final String label;
         final int chipBackgroundColorRes;
@@ -812,32 +623,6 @@ public class MainActivity extends AppCompatActivity {
             this.buttonBackgroundColorRes = buttonBackgroundColorRes;
             this.buttonTextColorRes = buttonTextColorRes;
         }
-    }
-
-    private void applyControlFade(View view, boolean enabled, float disabledAlpha) {
-        if (view == null) {
-            return;
-        }
-
-        view.setEnabled(enabled);
-        applyViewFade(view, enabled ? 1f : disabledAlpha);
-    }
-
-    private void applyViewFade(View view, float targetAlpha) {
-        if (view == null) {
-            return;
-        }
-
-        if (!hasUiStateApplied) {
-            view.setAlpha(targetAlpha);
-            return;
-        }
-
-        view.animate()
-                .alpha(targetAlpha)
-                .setDuration(180L)
-                .setInterpolator(entranceInterpolator)
-                .start();
     }
 
     /* ----------------- 回调方法 ----------------- */

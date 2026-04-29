@@ -111,6 +111,7 @@ The project integrates the AndroidLiquidGlass style to create an iOS/visionOS-li
    - The video area uses `TextureView` for the native rendering Surface.
    - `ComposeView` is a full-screen Liquid Glass overlay that draws the top information area, progress area, and button area.
    - The visible layout is organized into four stable zones: top text/status, video, progress, and controls.
+   - Hidden legacy controls have been fully removed; the Compose overlay is now the sole UI layer for playback controls, calling JNI methods directly through `LiquidActions`.
 
 2. **Liquid Glass Interaction**
    - `LiquidControls.kt`: Compose Liquid Glass panels and buttons based on `rememberLayerBackdrop()` and `drawBackdrop`.
@@ -402,6 +403,22 @@ flowchart LR
 
 ---
 
+## Legacy UI Decoupling
+
+The project previously used a hybrid approach where a full set of hidden legacy View controls (`SeekBar`, `MaterialButton`s, `MaterialCardView`s) existed in `activity_main.xml` with `visibility="gone"` and `1dp x 1dp` dimensions. The Compose Liquid Glass overlay duplicated all playback controls but still dispatched events through `performClick()` on these hidden views.
+
+This coupling has been removed:
+
+- **`activity_main.xml`**: The entire `legacy_controls` LinearLayout (containing hidden `seek_bar`, `play_button`, `pause_button`, `select_video_button`, `decode_video_button`, speed buttons, and associated cards) has been removed.
+- **`MainActivity.java`**: 14 hidden control member variables, their `findViewById` bindings, and click listeners have been removed. The `LiquidActions` implementation now calls business logic directly (`pickVideo()`, `startDecode()`, `resumeDecoding()`, `pauseDecoding()`, `applyPlaybackSpeed()`, `seekToPosition()`) instead of routing through `performClick()` on hidden buttons.
+- **State management**: `setPlaybackUiState()` and `updateUiStateColorScheme()` no longer apply fade/tint to hidden controls; they only update the visible header chips and sync state to Compose via `LiquidGlassHelper`.
+- **Progress tracking**: `updateProgress()` now only calls `LiquidGlassHelper.setProgress()`, delegating time display entirely to the Compose layer.
+- **Entrance animations**: `startEntranceAnimations()` simplified to only animate the visible `header_card`.
+- **Dead code removed**: `applyButtonTint()`, `applyControlFade()`, `applyViewFade()`, `updateTimeText()`, and associated member variables (`hasUiStateApplied`, `isSeeking`, `seekBar`, etc.) have been removed.
+- **New method**: `startDecode()` extracts the decode orchestration logic previously embedded in the hidden decode button's click listener.
+
+---
+
 ## Recent Stability Improvements
 
 - Render initialization failures set stop flags, wake packet queues, and terminate `FrameQueue`.
@@ -433,7 +450,7 @@ flowchart LR
 - **Unified transparent glass controls**: select, decode, play/pause, and speed controls share the same backdrop language.
 - **Physical button interaction**: select, decode, play, and pause buttons keep the AndroidLiquidGlass drag/rebound model, with click pulse only as a short-tap fallback.
 - **Real backdrop sampling**: Compose records the wallpaper backdrop around the video window so glass blur and lens effects scatter actual background pixels.
-- **State linkage**: `MainActivity` maps playback state to chips, button activity, progress, and Compose state.
+- **State linkage**: `MainActivity` maps playback state to chips, button activity, progress, and Compose state. (Note: after legacy control removal, button and SeekBar linkage is handled by the Compose layer; `MainActivity` only manages header chip colors and `LiquidGlassHelper` state sync.)
 - **Motion rhythm**: entrance and state transitions use subtle fade/slide animation; drag controls use spring release and elastic cleanup.
 - **Visual parameter alignment**: slider thumb 40×24dp, track 6dp; speed tabs container 64dp, indicator alpha follows press progress with a bright glass surface.
 - **Custom ripple**: `glassRipple()` with reduced alpha for subtler glass feedback.
